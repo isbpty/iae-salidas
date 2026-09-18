@@ -12,7 +12,7 @@ test('migrate creates the schema once and is idempotent', async () => {
     assert.ok(tables.includes(t), `missing table ${t}`);
   }
   const applied = await db.query('SELECT version FROM schema_migrations');
-  assert.equal(applied.length, 1);
+  assert.equal(applied.length, 2);
   await db.close();
 });
 

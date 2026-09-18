@@ -112,7 +112,7 @@ function targetWhere(target, params) {
 }
 export async function listNotifications(q, target) {
   const params = []; const w = targetWhere(target, params);
-  return all(await q.query(`SELECT * FROM notifications WHERE ${w} ORDER BY created_at, id`, params)).map((n) => ({ ...n, ts: n.createdAt, read: !!n.readAt }));
+  return all(await q.query(`SELECT * FROM notifications WHERE ${w} ORDER BY created_at, seq`, params)).map((n) => ({ ...n, ts: n.createdAt, read: !!n.readAt }));
 }
 export async function markNotificationsRead(q, target, at) {
   const params = [at.toISOString()]; const w = targetWhere(target, params);

@@ -68,4 +68,10 @@ CREATE TABLE IF NOT EXISTS audit_log (
 CREATE TABLE IF NOT EXISTS login_attempts (key text PRIMARY KEY, count integer NOT NULL DEFAULT 0, window_start timestamptz NOT NULL);
 `,
   },
+  {
+    version: '002_notifications_seq',
+    sql: `
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS seq bigserial;
+`,
+  },
 ];
