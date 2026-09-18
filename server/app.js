@@ -4,9 +4,10 @@ import { fileURLToPath } from 'node:url';
 import { HttpError } from './domain/errors.js';
 import { cookieValue, sessionToken, verifySession } from './session.js';
 import { constantEquals, loginBlocked, recordLoginFailure, clearLoginFailures } from './auth.js';
-import { listUsers, getUser, getRevision } from './db/repo.js';
+import { listUsers, getUser, getRevision, getAttachment } from './db/repo.js';
 import { runCommand } from './commands/run.js';
 import { buildView } from './projections/index.js';
+import { canSeeAttachment } from './projections/access.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon' };
@@ -65,6 +66,13 @@ export function createApp(deps) {
       if (req.headers['if-none-match'] === etag) { res.writeHead(304, { etag, 'cache-control': 'no-store' }); return res.end(); }
       const view = await db.tx((q) => buildView(q, user.id, env()));
       return json(res, 200, { revision, view }, { etag });
+    }
+    if (path.startsWith('attachments/') && req.method === 'GET') {
+      const att = await getAttachment(db, path.slice('attachments/'.length));
+      if (!att) return json(res, 404, { error: 'not_found' });
+      if (!(await db.tx((q) => canSeeAttachment(q, user, att, env())))) return json(res, 403, { error: 'forbidden_attachment' });
+      res.writeHead(200, { 'content-type': att.mime, 'cache-control': 'private, max-age=300', 'content-length': att.size });
+      return res.end(Buffer.from(att.bytes));
     }
     if (path.startsWith('commands/') && req.method === 'POST') {
       const name = path.slice('commands/'.length);
