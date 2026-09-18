@@ -1,0 +1,22 @@
+import { makeCtx } from '../domain/context.js';
+import { todayISO } from '../domain/time.js';
+import { listLevels } from '../db/repo.js';
+
+export const VIEW_BUILDERS = {};
+const ALL_CAPS = ['ver_solicitudes', 'aprobar', 'ver_excusas', 'decidir_excusas', 'marcar_salida', 'ver_estudiantes', 'gestionar_autorizados', 'ver_rutas', 'marcar_bus', 'personal', 'config', 'bitacora', 'todos_niveles'];
+
+export async function buildView(q, userId, env) {
+  const ctx = await makeCtx(q, env, userId);
+  const { user } = ctx;
+  const capabilities = user.role === 'admin' ? Object.fromEntries(ALL_CAPS.map((c) => [c, true])) : (ctx.permissions[user.role] || {});
+  const base = {
+    user: { id: user.id, name: user.name, role: user.role, kind: user.kind, refId: user.refId },
+    serverNow: ctx.now.getTime(),
+    today: todayISO(ctx.now, ctx.tz),
+    settings: ctx.settings,
+    capabilities,
+    levels: await listLevels(q),
+  };
+  const builder = VIEW_BUILDERS[user.role];
+  return builder ? { ...base, ...(await builder(ctx)) } : base;
+}

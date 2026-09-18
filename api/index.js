@@ -1,12 +1,25 @@
-import crypto from 'node:crypto';
-import { PostgresStore } from '../server/postgres-store.js';
-import { connectedSeed } from '../server/seed.js';
-import { cookieValue, sessionToken, verifySession } from '../server/session.js';
-import { validatePrototypeMutation } from '../server/prototype-policy.js';
-import { applyPrototypeCommand } from '../server/prototype-commands.js';
-let storePromise;
-async function getStore(){if(!process.env.DATABASE_URL)throw Object.assign(new Error('DATABASE_URL_required'),{status:503});if(!storePromise)storePromise=(async()=>{const s=new PostgresStore(process.env.DATABASE_URL);await s.load(connectedSeed());return s})();return storePromise}
-const safeState=(state,user)=>({school:state.school,currentUser:{id:user.id,name:user.name,role:user.role,prototypeIdentity:user.prototypeIdentity||{}},students:state.students,authorizedPickups:state.authorizedPickups,requests:state.requests,notifications:state.notifications.filter(n=>user.role==='admin'||n.userId===user.id),audit:['admin','reception'].includes(user.role)?state.audit:[],deliveryAttempts:['admin','reception'].includes(user.role)?state.deliveryAttempts:[],transports:{...state.transports,whatsappQr:{status:'placeholder',testOnly:true}}});
-const send=(res,status,value,headers={})=>{for(const[k,v]of Object.entries(headers))res.setHeader(k,v);res.setHeader('cache-control','no-store');return res.status(status).json(value)};
-export async function handle(req,res){try{const store=await getStore(),path=String(req.query.path||'').replace(/^\/+|\/+$/g,''),secret=process.env.SESSION_SECRET,pin=process.env.PILOT_PIN;if(!secret||!pin)return send(res,503,{error:'deployment_secrets_required'});if(path==='health')return send(res,200,{ok:true,mode:'vercel-neon-demo',whatsapp:'placeholder'});if(path==='auth/options')return send(res,200,store.state.users.map(({phone,studentIds,...u})=>u));if(path==='auth/login'&&req.method==='POST'){const user=store.state.users.find(x=>x.id===req.body?.userId);if(!user||String(req.body?.pin)!==pin)return send(res,401,{error:'invalid_credentials'});return send(res,200,{user:{id:user.id,name:user.name,role:user.role}},{'set-cookie':`iae_session=${sessionToken(user.id,secret)}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=28800`})}if(path==='auth/logout'&&req.method==='POST')return send(res,200,{ok:true},{'set-cookie':'iae_session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0'});const session=verifySession(cookieValue(req.headers.cookie,'iae_session'),secret),user=session&&store.state.users.find(x=>x.id===session.userId);if(!user)return send(res,401,{error:'authentication_required'});if(path==='state'&&req.method==='GET')return send(res,200,safeState(store.state,user));if(path==='prototype-state'&&req.method==='GET')return send(res,200,{state:store.state.prototypeState,revision:store.state.prototypeRevision||0});if(path==='prototype-state'&&req.method==='PUT'){const input=req.body||{};if(!input.state||typeof input.state!=='object')return send(res,400,{error:'invalid_state'});const saved=await store.mutate(s=>{if(input.expectedRevision!=null&&input.expectedRevision!==(s.prototypeRevision||0))throw Object.assign(new Error('prototype_revision_conflict'),{status:409});validatePrototypeMutation(s.prototypeState,input.state,user);s.prototypeState=input.state;s.prototypeRevision=(s.prototypeRevision||0)+1;(s.audit||=[]).unshift({id:crypto.randomUUID(),at:new Date().toISOString(),actorId:user.id,actorRole:user.role,action:input.initialize?'prototype.initialized':'prototype.updated',entity:'prototype:shared'});return{ok:true,revision:s.prototypeRevision}});return send(res,200,saved)}if(path==='prototype-command'&&req.method==='POST'){const input=req.body||{};const saved=await store.mutate(s=>{if(input.expectedRevision!==(s.prototypeRevision||0))throw Object.assign(new Error('prototype_revision_conflict'),{status:409});s.prototypeState=applyPrototypeCommand(s,user,input.command||{});s.prototypeRevision=(s.prototypeRevision||0)+1;(s.audit||=[]).unshift({id:crypto.randomUUID(),at:new Date().toISOString(),actorId:user.id,actorRole:user.role,action:`prototype.command.${input.command?.type||'unknown'}`,entity:'prototype:shared'});return{ok:true,revision:s.prototypeRevision,state:s.prototypeState}});return send(res,200,saved)}if(path==='whatsapp/status')return send(res,200,{status:'placeholder',message:'La integración real de WhatsApp se conectará en una fase futura. El chat web usa el simulador ahora.'});return send(res,404,{error:'not_found'})}catch(e){return send(res,e.status||500,{error:e.message})}}
-export default handle;
+import { loadConfig } from '../server/config.js';
+import { openDb } from '../server/db/client.js';
+import { migrate } from '../server/db/migrate.js';
+import { seedIfEmpty } from '../server/db/seed.js';
+import { createApp } from '../server/app.js';
+import { SimulatorTransport } from '../server/transports/whatsapp.js';
+import { SimulatedGps } from '../server/transports/gps.js';
+
+let appPromise;
+function getApp() {
+  if (!appPromise) {
+    appPromise = (async () => {
+      const config = loadConfig();
+      const db = await openDb(config);
+      await migrate(db);
+      await db.tx((q) => seedIfEmpty(q, { now: new Date(), tz: 'America/Panama' }));
+      return createApp({ db, config, transport: new SimulatorTransport(), gps: new SimulatedGps(), now: () => new Date() });
+    })().catch((e) => { appPromise = null; throw e; });
+  }
+  return appPromise;
+}
+export default async function handler(req, res) {
+  try { const app = await getApp(); return await app.handler(req, res); }
+  catch (e) { res.statusCode = 503; res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ error: e.message })); }
+}
