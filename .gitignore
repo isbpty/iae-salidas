@@ -10,3 +10,6 @@ check.json
 *.log
 Thumbs.db
 .DS_Store
+# Datos del piloto conectado (generados en runtime)
+data/
+.env
