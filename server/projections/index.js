@@ -20,3 +20,8 @@ export async function buildView(q, userId, env) {
   const builder = VIEW_BUILDERS[user.role];
   return builder ? { ...base, ...(await builder(ctx)) } : base;
 }
+
+import { parentView } from './parent.js';
+import { staffView } from './staff.js';
+VIEW_BUILDERS.parent = parentView;
+for (const role of ['admin', 'recepcion', 'profesor', 'garita', 'monitora']) VIEW_BUILDERS[role] = staffView;
