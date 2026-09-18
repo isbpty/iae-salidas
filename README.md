@@ -1,5 +1,7 @@
 # IAE Salidas · Demo funcional
 
+**Demo en vivo:** <https://isbpty.github.io/iae-salidas/> · **Código:** <https://github.com/isbpty/iae-salidas>
+
 Demo de una plataforma de **salidas tempranas y excusas** para una escuela, con tres caras:
 
 | Vista | Qué muestra |
