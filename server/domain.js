@@ -1,3 +1,4 @@
+import { queueDelivery, runDelivery } from './delivery.js';
 import { randomInt, randomUUID } from 'node:crypto';
 const can = (actor, roles) => actor && roles.includes(actor.role);
 const studentFor = (state, id) => state.students.find(x => x.id === id);
@@ -8,7 +9,7 @@ export function audit(state, actor, action, entity, detail = {}) {
   state.audit.unshift(event); return event;
 }
 export function notifyGuardians(state, student, text) {
-  for (const userId of student.guardianIds) state.notifications.unshift({ id: randomUUID(), at: new Date().toISOString(), userId, text, read: false });
+  for (const userId of student.guardianIds) { const notification={ id: randomUUID(), at: new Date().toISOString(), userId, text, read: false }; state.notifications.unshift(notification); const attempt=queueDelivery(state,notification,'simulator'); runDelivery(state,attempt.id); }
 }
 export function createRequest(state, actor, input, source = 'web') {
   if (!can(actor, ['parent'])) throw Object.assign(new Error('forbidden'), { status: 403 });

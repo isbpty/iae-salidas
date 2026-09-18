@@ -1,0 +1,11 @@
+services:
+  iae-salidas:
+    build: .
+    ports: ["3000:3000"]
+    environment:
+      SESSION_SECRET: ${SESSION_SECRET:?Set SESSION_SECRET}
+      PILOT_PIN: ${PILOT_PIN:?Set PILOT_PIN}
+    volumes: ["iae-data:/data"]
+    restart: unless-stopped
+volumes:
+  iae-data:
