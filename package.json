@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "node server/index.js",
-    "test": "node --test server/",
+    "test": "node --test \"server/**/*.test.js\"",
     "reset": "node -e \"import('node:fs').then(fs=>fs.rmSync('data/pglite',{recursive:true,force:true}))\""
   },
   "engines": { "node": ">=20" },
