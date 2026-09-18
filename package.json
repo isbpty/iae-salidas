@@ -5,7 +5,13 @@
   "type": "module",
   "scripts": {
     "start": "node server/index.js",
-    "test": "node --test"
+    "test": "node --test",
+    "check": "node --check server/index.js && node --check connected-bridge.js && npm test"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  },
+  "optionalDependencies": {
+    "whatsapp-web.js": "^1.34.6"
+  }
 }

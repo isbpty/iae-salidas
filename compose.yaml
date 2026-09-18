@@ -5,6 +5,8 @@ services:
     environment:
       SESSION_SECRET: ${SESSION_SECRET:?Set SESSION_SECRET}
       PILOT_PIN: ${PILOT_PIN:?Set PILOT_PIN}
+      WHATSAPP_TRANSPORT: ${WHATSAPP_TRANSPORT:-simulator}
+      WHATSAPP_SESSION_PATH: /data/whatsapp-session
     volumes: ["iae-data:/data"]
     restart: unless-stopped
 volumes:

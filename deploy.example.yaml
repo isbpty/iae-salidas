@@ -1,0 +1,10 @@
+# Provider-neutral container contract. Do not commit real secrets.
+service:
+  build: Dockerfile
+  port: 3000
+  healthcheck: /api/health
+  persistentVolume: /data
+  requiredSecrets: [SESSION_SECRET, PILOT_PIN]
+  optionalEnvironment:
+    WHATSAPP_TRANSPORT: simulator # switch to qr-web only on an approved test host
+    WHATSAPP_SESSION_PATH: /data/whatsapp-session
