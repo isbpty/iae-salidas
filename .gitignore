@@ -1,0 +1,12 @@
+# Videos y proyectos de Hyperframes (renders, musica y SFX pesados)
+brag-output*/
+# Herramientas locales
+.claude/
+node_modules/
+.hf-tmp/
+renders/
+snapshots/
+check.json
+*.log
+Thumbs.db
+.DS_Store
