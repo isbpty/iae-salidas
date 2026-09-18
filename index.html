@@ -1,3 +1,29 @@
-<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>IAE Salidas · Piloto conectado</title><link rel="stylesheet" href="styles.css"><style>
-.connected-badge{font-size:11px;padding:4px 8px;border-radius:999px;background:#dcfce7;color:#166534}.auth-card{max-width:430px;margin:10vh auto;background:#fff;border:1px solid var(--line);border-radius:18px;padding:24px;box-shadow:var(--shadow)}.auth-card label{display:block;margin:14px 0}.auth-card select,.auth-card input{width:100%;padding:10px;border:1px solid var(--line);border-radius:9px}.request.pending{border-left:4px solid #d97706}.request.approved{border-left:4px solid #16a34a}.request.picked_up{border-left:4px solid #2563eb}.transport-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.qr-payload{word-break:break-all;font:11px monospace;background:#eff6ff;padding:8px;border-radius:8px}.wa-message{white-space:pre-wrap}.role-note{margin-left:auto}.connected-grid{display:grid;grid-template-columns:380px 1fr;gap:18px}@media(max-width:850px){.connected-grid{grid-template-columns:1fr}.topbar-right{display:none}}
-</style></head><body><header class="topbar"><div class="brand">🏫 <b>IAE Salidas</b> <span class="connected-badge">piloto conectado</span></div><nav class="tabs" id="tabs"></nav><div class="topbar-right"><span id="identity"></span><button class="btn ghost" id="logout">Salir</button></div></header><main id="main"></main><div id="toasts"></div><script type="module" src="connected-app.js"></script></body></html>
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>IAE Salidas · Demo</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">🏫 <b>IAE Salidas</b> <span class="muted">demo</span></div>
+    <nav class="tabs" id="tabs"></nav>
+    <div class="topbar-right">
+      <label class="switch"><input type="checkbox" id="splitToggle"> Vista dividida</label>
+      <span id="clock" class="muted mono"></span>
+      <button class="btn ghost" data-action="showGuide">📖 Guion</button>
+      <button class="btn ghost danger" data-action="resetDemo">↺ Reiniciar</button>
+    </div>
+  </header>
+  <main id="main"></main>
+  <div id="toasts"></div>
+  <div id="modal" class="modal hidden"></div>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script src="seed.js"></script>
+  <script src="app.js"></script>
+  <script src="views.js"></script>
+  <script src="connected-bridge.js"></script>
+</body>
+</html>

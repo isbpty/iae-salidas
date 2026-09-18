@@ -1,4 +1,5 @@
 import http from 'node:http';
+import crypto from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,6 +25,8 @@ async function api(req,res,url){
  if(url.pathname==='/api/auth/logout'&&req.method==='POST')return json(res,200,{ok:true},{'set-cookie':'iae_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0'});
  const user=actor(req);if(!user)return json(res,401,{error:'authentication_required'});
  if(url.pathname==='/api/state'&&req.method==='GET')return json(res,200,safeState(store.state,user));
+ if(url.pathname==='/api/prototype-state'&&req.method==='GET')return json(res,200,{state:store.state.prototypeState});
+ if(url.pathname==='/api/prototype-state'&&req.method==='PUT'){const input=await body(req);if(!input.state||typeof input.state!=='object')return json(res,400,{error:'invalid_state'});const allowed=['parent','reception','gate','admin','teacher','monitora'];if(!allowed.includes(user.role))return json(res,403,{error:'forbidden'});result=await store.mutate(s=>{s.prototypeState=input.state;s.audit.unshift({id:crypto.randomUUID(),at:new Date().toISOString(),actorId:user.id,actorRole:user.role,action:input.initialize?'prototype.initialized':'prototype.updated',entity:'prototype:shared'});return {ok:true}});publish({type:'prototype.changed',actorId:user.id});return json(res,200,result)}
  if(url.pathname==='/api/events'&&req.method==='GET'){res.writeHead(200,{'content-type':'text/event-stream','cache-control':'no-cache','connection':'keep-alive'});res.write(`data: ${JSON.stringify({type:'connected'})}\n\n`);clients.add(res);req.on('close',()=>clients.delete(res));return}
  let result;
  if(url.pathname==='/api/requests'&&req.method==='POST'){const input=await body(req);result=await store.mutate(s=>createRequest(s,user,input))}
