@@ -18,7 +18,7 @@ export function connectedSeed() {
     authorizedPickups: [
       { id: 'pickup-maria', studentId: 'joseph', name: 'María Pérez', relation: 'Abuela', cedula: '8-200-111', status: 'active' }
     ],
-    requests: [], notifications: [], deliveryAttempts: [], audit: [], inboundMessages: [], prototypeState: null,
+    requests: [], notifications: [], deliveryAttempts: [], audit: [], inboundMessages: [], prototypeState: null, prototypeRevision: 0,
     transports: { simulator: { status: 'connected' }, whatsappQr: { status: 'disconnected', testOnly: true } }
   };
 }

@@ -1,67 +1,14 @@
-/* Connected persistence/auth adapter. The original UI and renderers remain untouched. */
+/* Connected persistence/auth adapter. Original UI renderers remain untouched. */
 (() => {
-  const originalSave = window.save;
-  let remoteReady = false, timer = null, syncing = false, currentUser = null;
-  const api = async (path, opts = {}) => {
-    const res = await fetch(path, { ...opts, headers: { 'content-type': 'application/json', ...(opts.headers || {}) } });
-    const value = await res.json();
-    if (!res.ok) throw Object.assign(new Error(value.error || res.status), { status: res.status });
-    return value;
-  };
-  const sync = () => {
-    if (!remoteReady || syncing) return;
-    clearTimeout(timer);
-    timer = setTimeout(async () => {
-      syncing = true;
-      try { await api('/api/prototype-state', { method: 'PUT', body: JSON.stringify({ state: S }) }); setBadge('conectado'); }
-      catch { setBadge('sin conexión'); }
-      finally { syncing = false; }
-    }, 120);
-  };
-  window.save = function connectedSave() { originalSave(); sync(); };
-  function setBadge(text) {
-    let badge = document.getElementById('connectedStatus');
-    if (!badge) { badge = document.createElement('span'); badge.id = 'connectedStatus'; badge.className = 'muted small'; document.querySelector('.brand').append(' · ', badge); }
-    badge.textContent = text;
-  }
-  function lockIdentity() {
-    if (!currentUser) return;
-    const { personId, phoneId, staffId } = currentUser.prototypeIdentity || {};
-    if (personId) UI.parentId = personId;
-    if (phoneId) UI.phoneId = phoneId;
-    if (staffId) UI.staffId = staffId;
-    UI.view = currentUser.role === 'parent' ? 'parents' : 'school';
-    if (currentUser.role === 'gate') UI.schoolTab = 'salidas_hoy';
-    if (currentUser.role === 'monitora') UI.schoolTab = 'rutas';
-  }
-  async function start() {
-    try {
-      currentUser = (await api('/api/state')).currentUser;
-    } catch (error) {
-      if (error.status === 401) return login();
-      setBadge('sin conexión'); return;
-    }
-    const remote = await api('/api/prototype-state');
-    if (remote.state) S = remote.state;
-    else await api('/api/prototype-state', { method: 'PUT', body: JSON.stringify({ state: S, initialize: true }) });
-    lockIdentity(); remoteReady = true; originalSave(); render(); setBadge('conectado');
-    const events = new EventSource('/api/events');
-    events.onmessage = async e => {
-      if (JSON.parse(e.data).type !== 'prototype.changed' || syncing) return;
-      const next = await api('/api/prototype-state');
-      if (next.state) { S = next.state; originalSave(); render(); setBadge('conectado'); }
-    };
-  }
-  async function login() {
-    const options = await api('/api/auth/options');
-    const modal = document.getElementById('modal');
-    modal.className = 'modal';
-    modal.innerHTML = `<div class="modal-card" style="max-width:420px"><h2>🏫 Entrar a IAE Salidas</h2><p class="muted">Piloto conectado</p><form id="connectedLogin" class="form"><label>Usuario<select name="userId">${options.map(x => `<option value="${esc(x.id)}">${esc(x.name)} · ${esc(x.role)}</option>`).join('')}</select></label><label>PIN<input name="pin" type="password" inputmode="numeric" required autofocus></label><button class="btn primary big">Entrar</button><div id="loginError" class="danger-text small"></div></form></div>`;
-    document.getElementById('connectedLogin').onsubmit = async e => {
-      e.preventDefault(); const data = Object.fromEntries(new FormData(e.target));
-      try { await api('/api/auth/login', { method: 'POST', body: JSON.stringify(data) }); modal.className = 'modal hidden'; start(); }
-      catch { document.getElementById('loginError').textContent = 'Usuario o PIN incorrecto.'; }
-    };
-  }
-  window.addEventListener('DOMContentLoaded', start);
+  const originalSave=window.save;let remoteReady=false,syncing=false,currentUser=null,confirmed=null,revision=0,queued=null;
+  const clone=value=>structuredClone(value);const api=async(path,opts={})=>{const res=await fetch(path,{...opts,headers:{'content-type':'application/json',...(opts.headers||{})}});const value=await res.json();if(!res.ok)throw Object.assign(new Error(value.error||res.status),{status:res.status});return value};
+  function setBadge(text){let badge=document.getElementById('connectedStatus');if(!badge){badge=document.createElement('span');badge.id='connectedStatus';badge.className='muted small';document.querySelector('.brand').append(' · ',badge)}badge.textContent=text}
+  function rejection(error){S=clone(confirmed);originalSave();render();setBadge('conectado · cambio rechazado');toast(`No se guardó el cambio: ${error.message}`,'error')}
+  function commandFor(before,after){const oldReq=new Map((before.requests||[]).map(x=>[x.id,x]));for(const cur of after.requests||[]){const prev=oldReq.get(cur.id);if(!prev)continue;if(prev.status!==cur.status&&cur.status==='cancelada')return{type:'cancel_request',requestId:cur.id};if(JSON.stringify(prev.confirmation)!==JSON.stringify(cur.confirmation)&&cur.confirmation)return{type:'confirm_pickup',requestId:cur.id,confirmed:cur.confirmation.status==='confirmada'}}for(const[key,trip]of Object.entries(after.busTrips||{})){const prior=before.busTrips?.[key];if(!prior)continue;const added=(trip.noBus||[]).find(id=>!(prior.noBus||[]).includes(id));if(added)return{type:'bus_opt_out',tripKey:key,studentId:added}}return null}
+  async function commit(proposed){if(syncing){queued=proposed;return}syncing=true;setBadge('guardando…');const command=commandFor(confirmed,proposed);try{const result=command?await api('/api/prototype-command',{method:'POST',body:JSON.stringify({expectedRevision:revision,command})}):await api('/api/prototype-state',{method:'PUT',body:JSON.stringify({state:proposed,expectedRevision:revision})});revision=result.revision;confirmed=clone(result.state||proposed);S=clone(confirmed);originalSave();render();setBadge('conectado')}catch(error){if(error.status===409){const latest=await api('/api/prototype-state');confirmed=clone(latest.state);revision=latest.revision}rejection(error)}finally{syncing=false;if(queued){const next=queued;queued=null;commit(next)}}}
+  window.save=function connectedSave(){originalSave();if(!remoteReady)return;const proposed=clone(S);S=clone(confirmed);originalSave();queueMicrotask(()=>{render();if(syncing)queued=proposed;else commit(proposed)})};
+  function lockIdentity(){const{personId,phoneId,staffId}=currentUser.prototypeIdentity||{};if(personId)UI.parentId=personId;if(phoneId)UI.phoneId=phoneId;if(staffId)UI.staffId=staffId;UI.view=currentUser.role==='parent'?'parents':'school';if(currentUser.role==='gate')UI.schoolTab='salidas_hoy';if(currentUser.role==='monitora')UI.schoolTab='rutas'}
+  async function start(){try{currentUser=(await api('/api/state')).currentUser}catch(error){if(error.status===401)return login();setBadge('sin conexión');return}const remote=await api('/api/prototype-state');if(remote.state){S=remote.state;revision=remote.revision}else{const init=await api('/api/prototype-state',{method:'PUT',body:JSON.stringify({state:S,initialize:true,expectedRevision:remote.revision})});revision=init.revision}lockIdentity();confirmed=clone(S);remoteReady=true;originalSave();render();setBadge('conectado');const events=new EventSource('/api/events');events.onmessage=async e=>{if(JSON.parse(e.data).type!=='prototype.changed'||syncing)return;const next=await api('/api/prototype-state');if(next.state){S=next.state;confirmed=clone(next.state);revision=next.revision;originalSave();render();setBadge('conectado')}}}
+  async function login(){const options=await api('/api/auth/options'),modal=document.getElementById('modal');modal.className='modal';modal.innerHTML=`<div class="modal-card" style="max-width:420px"><h2>🏫 Entrar a IAE Salidas</h2><p class="muted">Piloto conectado</p><form id="connectedLogin" class="form"><label>Usuario<select name="userId">${options.map(x=>`<option value="${esc(x.id)}">${esc(x.name)} · ${esc(x.role)}</option>`).join('')}</select></label><label>PIN<input name="pin" type="password" inputmode="numeric" required autofocus></label><button class="btn primary big">Entrar</button><div id="loginError" class="danger-text small"></div></form></div>`;document.getElementById('connectedLogin').onsubmit=async e=>{e.preventDefault();const data=Object.fromEntries(new FormData(e.target));try{await api('/api/auth/login',{method:'POST',body:JSON.stringify(data)});modal.className='modal hidden';start()}catch{document.getElementById('loginError').textContent='Usuario o PIN incorrecto.'}}}
+  window.addEventListener('DOMContentLoaded',start);
 })();
