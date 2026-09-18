@@ -20,7 +20,7 @@
 - Every error thrown by domain/commands is an `HttpError` with `status` ∈ {400, 401, 403, 404, 409, 413} and a snake_case `code` in the message. The router maps them to `{ error: code }`.
 - All user-facing text stays in Spanish and keeps the exact wording of the prototype (`app.js`) wherever the same message exists.
 - Secrets: `SESSION_SECRET` (≥ 32 chars) and `PILOT_PIN` are mandatory; `DATABASE_URL` is mandatory on Vercel and optional locally (PGlite fallback).
-- Static files served by the local server are only `/` (→ `index.html`) and `/client/<file>` where `<file>` has no path separators.
+- Static files served by the local server are only `/` (→ `public/index.html`) and `/client/<file>` → `public/client/<file>`, where `<file>` has no path separators.
 - Tests are run with `npm test` = `node --test "server/**/*.test.js"`. Every task ends with `npm test` green and a commit. Commit messages end with `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`.
 - Work happens on branch `connected-pilot` in `C:\Users\isaac\OneDrive - Rejovot\Documents\IAESalidas`. Existing files `app.js`, `seed.js`, `views.js`, `styles.css` are the porting sources and are deleted only in the final task.
 

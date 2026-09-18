@@ -62,7 +62,7 @@ function afterLogin() {
   document.getElementById('logoutBtn').style.display = '';
   setBadge('conectado · ' + ME.name);
   render();
-  if (!subscribed) { subscribed = true; api.subscribe(refresh); }
+  if (!subscribed) { subscribed = true; api.subscribe(refresh, V.realtime); }
 }
 async function showLogin() {
   if (loginShowing) return;

@@ -4,8 +4,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY server ./server
 COPY api ./api
-COPY client ./client
-COPY index.html ./
+COPY public ./public
 RUN mkdir -p /data
 ENV NODE_ENV=production PORT=3000 PGLITE_DIR=/data/pglite
 EXPOSE 3000

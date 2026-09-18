@@ -128,7 +128,7 @@ function parentAuths(p) {
       let vig = '';
       if (a.type === 'temporal') vig = a.validFrom + ' → ' + a.validTo;
       if (a.type === 'una_vez') vig = a.usedAt ? 'ya usada' : 'pendiente de uso';
-      return '<div class="row item' + (active ? '' : ' inactive') + '"><span class="avatar sm">🧑</span><div><b>' + esc(pr.name) + '</b> <span class="muted small">' + esc(pr.relation) + ' · céd. ' + esc(pr.cedula) + (pr.hasAccount ? ' · 📱 tiene cuenta' : '') + '</span><div class="small">' + kindBadge(a.type) + ' <span class="muted">' + vig + (active ? '' : ' · inactiva') + '</span></div></div>' +
+      return '<div class="row item' + (active ? '' : ' inactive') + '"><span class="avatar sm">🧑</span><div><b>' + esc(pr.name) + '</b> <span class="muted small">' + esc(pr.relation) + (pr.cedula ? ' · céd. ' + esc(pr.cedula) : '') + (pr.hasAccount ? ' · 📱 tiene cuenta' : '') + '</span><div class="small">' + kindBadge(a.type) + ' <span class="muted">' + vig + (active ? '' : ' · inactiva') + '</span></div></div>' +
         '<button class="btn tiny danger" data-action="revokeAuth" data-id="' + a.id + '" title="Revocar">✕</button></div>';
     }).join('');
     return '<div class="card"><div class="row"><span class="avatar sm">' + k.emoji + '</span><b>' + esc(k.name) + '</b> <span class="muted small">máx. ' + V.settings.maxTitulares + ' titulares</span></div>' + tit + (auths || '<div class="muted small">Sin personas autorizadas.</div>') + '</div>';

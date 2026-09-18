@@ -19,7 +19,7 @@ export function createApp(deps) {
     const line = `data: ${JSON.stringify({ type: 'changed', revision })}\n\n`;
     for (const res of clients) res.write(line);
   };
-  const env = () => ({ now: deps.now(), transport: deps.transport, gps: deps.gps });
+  const env = () => ({ now: deps.now(), transport: deps.transport, gps: deps.gps, serverless: config.serverless });
   const json = (res, status, value, headers = {}) => {
     res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers });
     res.end(JSON.stringify(value));
@@ -27,11 +27,25 @@ export function createApp(deps) {
   const cookie = (token, maxAge) => `iae_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAge}${config.secure ? '; Secure' : ''}`;
   async function readBody(req) {
     if (req.body && typeof req.body === 'object') return req.body;
-    let raw = '';
-    for await (const chunk of req) { raw += chunk; if (raw.length > 1.5e6) throw new HttpError(413, 'too_large'); }
+    const chunks = [];
+    let bytes = 0;
+    for await (const chunk of req) {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      bytes += buf.length;
+      if (bytes > 1.5e6) throw new HttpError(413, 'too_large');
+      chunks.push(buf);
+    }
+    /* Concatenate first: a multi-byte character may straddle two chunks. */
+    const raw = Buffer.concat(chunks, bytes).toString('utf8');
     return raw ? JSON.parse(raw) : {};
   }
-  const clientIp = (req) => String(req.headers['x-forwarded-for'] || (req.socket && req.socket.remoteAddress) || 'unknown').split(',')[0].trim();
+  /* Only a platform proxy (Vercel) may name the client; a direct listener would let anyone
+     spoof the header and walk around the per-IP login limit. */
+  const clientIp = (req) => {
+    const direct = (req.socket && req.socket.remoteAddress) || 'unknown';
+    const source = config.serverless ? req.headers['x-forwarded-for'] || direct : direct;
+    return String(source).split(',')[0].trim();
+  };
   async function sessionUser(req) {
     const session = verifySession(cookieValue(req.headers.cookie, 'iae_session'), config.secret);
     if (!session) return null;
@@ -71,7 +85,15 @@ export function createApp(deps) {
       const att = await getAttachment(db, path.slice('attachments/'.length));
       if (!att) return json(res, 404, { error: 'not_found' });
       if (!(await db.tx((q) => canSeeAttachment(q, user, att, env())))) return json(res, 403, { error: 'forbidden_attachment' });
-      res.writeHead(200, { 'content-type': att.mime, 'cache-control': 'private, max-age=300', 'content-length': att.size });
+      const filename = String(att.name || 'adjunto').replace(/[^A-Za-z0-9._-]/g, '_');
+      res.writeHead(200, {
+        'content-type': att.mime,
+        'cache-control': 'private, max-age=300',
+        'content-length': att.size,
+        'x-content-type-options': 'nosniff',
+        'content-security-policy': "default-src 'none'; sandbox",
+        'content-disposition': `inline; filename="${filename}"`,
+      });
       return res.end(Buffer.from(att.bytes));
     }
     if (path.startsWith('commands/') && req.method === 'POST') {
@@ -94,10 +116,10 @@ export function createApp(deps) {
 
   async function serveStatic(res, pathname) {
     let file = null;
-    if (pathname === '/' || pathname === '/index.html') file = join(ROOT, 'index.html');
+    if (pathname === '/' || pathname === '/index.html') file = join(ROOT, 'public', 'index.html');
     else {
       const m = /^\/client\/([A-Za-z0-9_][A-Za-z0-9_.-]*)$/.exec(pathname);
-      if (m) file = join(ROOT, 'client', m[1]);
+      if (m) file = join(ROOT, 'public', 'client', m[1]);
     }
     if (!file) return json(res, 404, { error: 'not_found' });
     try {
@@ -118,7 +140,7 @@ export function createApp(deps) {
       return await serveStatic(res, url.pathname);
     } catch (e) {
       const status = e.status || (e instanceof SyntaxError ? 400 : 500);
-      if (status === 500) console.error(e);
+      if (status === 500) { console.error(e); return json(res, 500, { error: 'internal_error', message: null }); }
       return json(res, status, { error: e.code || e.message, message: e.detail || null });
     }
   }

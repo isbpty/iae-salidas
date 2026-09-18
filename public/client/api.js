@@ -35,11 +35,15 @@ const api = (() => {
       const mime = (/^data:([^;]+)/.exec(head) || [])[1] || file.type;
       return { purpose, mime, name: file.name, dataBase64: data };
     },
-    /* Notificación de cambios: SSE en local, sondeo cada 3 s en Vercel (o si SSE falla). */
-    subscribe(onChange) {
-      if (window.__IAE_SERVERLESS__ || !window.EventSource) { setInterval(onChange, 3000); return; }
+    /* Notificación de cambios: el servidor dice cuál usar en `view.realtime`
+       ('sse' en local, 'poll' donde no hay conexión larga). Si el SSE falla, se pasa a sondeo. */
+    subscribe(onChange, mode) {
+      const poll = () => setInterval(onChange, 3000);
+      if (mode === 'poll' || !window.EventSource) { poll(); return; }
       const es = new EventSource('/api/events');
       es.onmessage = () => onChange();
+      let fallenBack = false;
+      es.onerror = () => { if (fallenBack) return; fallenBack = true; es.close(); poll(); };
       setInterval(onChange, 15000); // red de seguridad si se pierde un evento
     },
   };
