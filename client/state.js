@@ -3,6 +3,9 @@ let V = null, ME = null, REV = 0, SKEW = 0;
 const UI = { view: 'parents', split: false, phoneId: 'p1', schoolTab: 'inicio', parentTab: 'inicio', modal: null, filter: 'todas', busy: false };
 const FORM_MODALS = ['newSalida', 'newExcusa', 'newAuth', 'reject', 'scan'];
 let markTimer = null, subscribed = false;
+/* Mientras el formulario de login está en pantalla nadie más toca el modal:
+   el sondeo sigue dando 401 y volvería a redibujarlo mientras se escribe el PIN. */
+let loginShowing = false;
 
 function setBadge(text) { const el = document.getElementById('connectedStatus'); if (el) el.textContent = text; }
 function serverNow() { return Date.now() + SKEW; }
@@ -27,6 +30,7 @@ function adopt(payload) {
   if (prev && prev.user.id === ME.id) toastNewNotifications(prev, V);
 }
 async function refresh() {
+  if (loginShowing) return;
   try {
     const r = await api.view('"' + REV + '"');
     if (r.notModified) return;
@@ -61,9 +65,11 @@ function afterLogin() {
   if (!subscribed) { subscribed = true; api.subscribe(refresh); }
 }
 async function showLogin() {
+  if (loginShowing) return;
+  loginShowing = true;
   setBadge('inicia sesión');
   let options = [];
-  try { options = await api.options(); } catch { setBadge('sin conexión'); return; }
+  try { options = await api.options(); } catch { loginShowing = false; setBadge('sin conexión'); return; }
   const modal = document.getElementById('modal');
   modal.className = 'modal';
   modal.innerHTML = '<div class="modal-card" style="max-width:420px"><h2>🏫 Entrar a IAE Salidas</h2><p class="muted">Elige tu usuario y escribe el PIN del piloto.</p>' +
@@ -72,7 +78,7 @@ async function showLogin() {
   document.getElementById('loginForm').onsubmit = async (e) => {
     e.preventDefault();
     const data = Object.fromEntries(new FormData(e.target));
-    try { await api.login(data.userId, data.pin); modal.className = 'modal hidden'; modal.innerHTML = ''; boot(); }
+    try { await api.login(data.userId, data.pin); modal.className = 'modal hidden'; modal.innerHTML = ''; loginShowing = false; boot(); }
     catch (err) { document.getElementById('loginError').textContent = err.status === 429 ? 'Demasiados intentos. Espera 15 minutos.' : 'Usuario o PIN incorrecto.'; }
   };
 }

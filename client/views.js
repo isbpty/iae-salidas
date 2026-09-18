@@ -45,7 +45,7 @@ function render() {
   const now = serverNow();
   const pend = Object.values(allChats()).flat().filter((m) => m.pendingUntil && m.pendingUntil > now).map((m) => m.pendingUntil);
   clearTimeout(pendingTimer);
-  if (pend.length) pendingTimer = setTimeout(render, Math.min(...pend) - now + 20);
+  if (pend.length) pendingTimer = setTimeout(() => { if (!formOpen()) render(); }, Math.min(...pend) - now + 20);
 }
 function renderTabs() {
   const all = [['parents', '📱 App Padres'], ['whatsapp', '💬 WhatsApp'], ['school', '🏫 Escuela'], ['log', '📜 Bitácora']];
