@@ -17,7 +17,7 @@ register({
       if (input.attachmentId) {
         const a = await getAttachment(ctx.q, input.attachmentId);
         if (!a) notFound('attachment_not_found');
-        if (ctx.person && a.ownerPersonId && a.ownerPersonId !== ctx.person.id) deny('forbidden_attachment');
+        if (ctx.person && a.ownerPersonId !== ctx.person.id) deny('forbidden_attachment');
       }
       const mode = input.mode === 'cuenta' ? 'cuenta' : 'nueva';
       return addAuthorization(ctx, {

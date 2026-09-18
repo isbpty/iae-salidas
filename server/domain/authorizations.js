@@ -30,8 +30,8 @@ export async function addAuthorization(ctx, { studentIds, personId, newPerson, a
   for (const sid of studentIds) {
     const st = await getStudent(ctx.q, sid);
     if (!st) notFound('student_not_found');
-    names.push(firstName(st.name));
     if (st.titulares.includes(pid)) continue; // ya es titular
+    names.push(firstName(st.name));
     const a = { id: uid('a'), studentId: sid, personId: pid, type, createdBy: creator.personId || null, createdAt: ctx.now, validFrom: type === 'temporal' ? from : null, validTo: type === 'temporal' ? to : null };
     await insertRow(ctx.q, 'authorizations', a);
     created.push(await getAuthorization(ctx.q, a.id));
@@ -39,7 +39,7 @@ export async function addAuthorization(ctx, { studentIds, personId, newPerson, a
     for (const t of st.titulares.filter((x) => x !== creator.personId)) await notifyPerson(ctx, t, 'ℹ️ ' + creator.name + ' autorizó a ' + p.name + ' (' + p.relation + ') para retirar a ' + st.name + ' · ' + AUTH_TYPES[type] + '.');
     if (p.hasAccount) await notifyPerson(ctx, pid, '🔑 ' + creator.name + ' te autorizó para retirar a ' + st.name + ' (' + st.grade + ') · ' + AUTH_TYPES[type] + (type === 'temporal' ? ' del ' + from + ' al ' + to : '') + '. Lo verás en tu app.');
   }
-  await notifyRole(ctx, 'recepcion', 'Nueva persona autorizada: ' + p.name + ' para ' + names.join(', ') + ' · ' + AUTH_TYPES[type]);
+  if (created.length) await notifyRole(ctx, 'recepcion', 'Nueva persona autorizada: ' + p.name + ' para ' + names.join(', ') + ' · ' + AUTH_TYPES[type]);
   return { personId: pid, authorizations: created };
 }
 

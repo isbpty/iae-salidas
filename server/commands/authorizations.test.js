@@ -30,9 +30,19 @@ test('validation: document required for new persons, dates, ownership, titular s
   await assert.rejects(t.run('add_authorization', 'u_p1', { studentIds: ['e1'], mode: 'cuenta', personId: 'p5', type: 'mensual' }), /invalid_type/);
   const { result } = await t.run('add_authorization', 'u_p1', { studentIds: ['e1'], mode: 'cuenta', personId: 'p2', type: 'siempre' });
   assert.equal(result.authorizations.length, 0, 'Ana is already a titular of Joseph');
+  const recepcionLast = (await texts(t.db, { role: 'recepcion' })).at(-1);
+  assert.ok(!recepcionLast || !recepcionLast.startsWith('Nueva persona autorizada: Ana Pérez'), 'no recepcion notice when nothing was created');
   const { result: acct } = await t.run('add_authorization', 'u_p1', { studentIds: ['e2'], mode: 'cuenta', personId: 'p5', type: 'una_vez' });
   assert.equal(acct.authorizations[0].type, 'una_vez');
   assert.match((await texts(t.db, { personId: 'p5' })).at(-1), /^🔑 Carlos Rodríguez te autorizó para retirar a Sofía Rodríguez \(Kínder\) · Una vez \(con confirmación\)\. Lo verás en tu app\.$/);
+  await t.close();
+});
+
+test('a parent may not attach a document they do not own', async () => {
+  const t = await makeTestApp();
+  const { result: up } = await t.run('upload_attachment', 'u_s2', { purpose: 'cedula', mime: 'image/png', name: 'c.png', dataBase64: svg });
+  await assert.rejects(t.run('add_authorization', 'u_p1', { studentIds: ['e1'], mode: 'nueva', name: 'Intruso', relation: 'Amigo', cedula: '9-9-9', attachmentId: up.attachmentId, type: 'siempre' }), /forbidden_attachment/);
+  await assert.rejects(t.run('add_authorization', 'u_p1', { studentIds: ['e1'], mode: 'nueva', name: 'Intruso', relation: 'Amigo', cedula: '9-9-9', attachmentId: 'att_missing', type: 'siempre' }), /attachment_not_found/);
   await t.close();
 });
 
