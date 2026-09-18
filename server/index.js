@@ -10,6 +10,7 @@ import { simulateInbound } from './simulator.js';
 import { cookieValue, sessionToken, verifySession } from './session.js';
 import { qrAction } from './qr-worker.js';
 import { retryDelivery } from './delivery.js';
+import { validatePrototypeMutation } from './prototype-policy.js';
 const ROOT=fileURLToPath(new URL('..',import.meta.url));
 const store=new Store(process.env.DATA_FILE||join(ROOT,'data','pilot.json'));await store.load(connectedSeed());
 const secret=process.env.SESSION_SECRET||'development-only-change-me';const pilotPin=process.env.PILOT_PIN||'2468';
@@ -17,7 +18,7 @@ const clients=new Set();const publish=payload=>{const line=`data: ${JSON.stringi
 const json=(res,status,value,headers={})=>{res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers});res.end(JSON.stringify(value))};
 const body=async req=>{let raw='';for await(const c of req){raw+=c;if(raw.length>1e6)throw Object.assign(new Error('too_large'),{status:413})}return raw?JSON.parse(raw):{}};
 const actor=req=>{const session=verifySession(cookieValue(req.headers.cookie,'iae_session'),secret);return session?store.state.users.find(x=>x.id===session.userId):null};
-const safeState=(state,user)=>({school:state.school,currentUser:{id:user.id,name:user.name,role:user.role},students:state.students,authorizedPickups:state.authorizedPickups,requests:state.requests,notifications:state.notifications.filter(n=>user.role==='admin'||n.userId===user.id),audit:['admin','reception'].includes(user.role)?state.audit:[],deliveryAttempts:['admin','reception'].includes(user.role)?state.deliveryAttempts:[],transports:state.transports});
+const safeState=(state,user)=>({school:state.school,currentUser:{id:user.id,name:user.name,role:user.role,prototypeIdentity:user.prototypeIdentity||{}},students:state.students,authorizedPickups:state.authorizedPickups,requests:state.requests,notifications:state.notifications.filter(n=>user.role==='admin'||n.userId===user.id),audit:['admin','reception'].includes(user.role)?state.audit:[],deliveryAttempts:['admin','reception'].includes(user.role)?state.deliveryAttempts:[],transports:state.transports});
 async function api(req,res,url){
  if(url.pathname==='/api/health')return json(res,200,{ok:true,mode:'connected-pilot',transport:store.state.transports});
  if(url.pathname==='/api/auth/options')return json(res,200,store.state.users.map(({phone,studentIds,...u})=>u));
@@ -26,7 +27,7 @@ async function api(req,res,url){
  const user=actor(req);if(!user)return json(res,401,{error:'authentication_required'});
  if(url.pathname==='/api/state'&&req.method==='GET')return json(res,200,safeState(store.state,user));
  if(url.pathname==='/api/prototype-state'&&req.method==='GET')return json(res,200,{state:store.state.prototypeState});
- if(url.pathname==='/api/prototype-state'&&req.method==='PUT'){const input=await body(req);if(!input.state||typeof input.state!=='object')return json(res,400,{error:'invalid_state'});const allowed=['parent','reception','gate','admin','teacher','monitora'];if(!allowed.includes(user.role))return json(res,403,{error:'forbidden'});const saved=await store.mutate(s=>{s.prototypeState=input.state;s.audit.unshift({id:crypto.randomUUID(),at:new Date().toISOString(),actorId:user.id,actorRole:user.role,action:input.initialize?'prototype.initialized':'prototype.updated',entity:'prototype:shared'});return {ok:true}});publish({type:'prototype.changed',actorId:user.id});return json(res,200,saved)}
+ if(url.pathname==='/api/prototype-state'&&req.method==='PUT'){const input=await body(req);if(!input.state||typeof input.state!=='object')return json(res,400,{error:'invalid_state'});const allowed=['parent','reception','gate','admin','teacher','monitora'];if(!allowed.includes(user.role))return json(res,403,{error:'forbidden'});const saved=await store.mutate(s=>{validatePrototypeMutation(s.prototypeState,input.state,user);s.prototypeState=input.state;s.audit.unshift({id:crypto.randomUUID(),at:new Date().toISOString(),actorId:user.id,actorRole:user.role,action:input.initialize?'prototype.initialized':'prototype.updated',entity:'prototype:shared'});return {ok:true}});publish({type:'prototype.changed',actorId:user.id});return json(res,200,saved)}
  if(url.pathname==='/api/events'&&req.method==='GET'){res.writeHead(200,{'content-type':'text/event-stream','cache-control':'no-cache','connection':'keep-alive'});res.write(`data: ${JSON.stringify({type:'connected'})}\n\n`);clients.add(res);req.on('close',()=>clients.delete(res));return}
  let result;
  if(url.pathname==='/api/requests'&&req.method==='POST'){const input=await body(req);result=await store.mutate(s=>createRequest(s,user,input))}

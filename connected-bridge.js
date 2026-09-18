@@ -26,9 +26,9 @@
   }
   function lockIdentity() {
     if (!currentUser) return;
-    const map = { 'parent-carlos': ['p1', 'p1'], 'parent-ana': ['p2', 'p2'], 'reception-yadira': [null, 's2'], 'gate-manuel': [null, 's6'], 'admin-rosa': [null, 's1'], 'teacher-diana': [null, 's3'], 'monitor-kenia': [null, 's7'] };
-    const [personId, staffId] = map[currentUser.id] || [];
-    if (personId) { UI.parentId = personId; UI.phoneId = personId; }
+    const { personId, phoneId, staffId } = currentUser.prototypeIdentity || {};
+    if (personId) UI.parentId = personId;
+    if (phoneId) UI.phoneId = phoneId;
     if (staffId) UI.staffId = staffId;
     UI.view = currentUser.role === 'parent' ? 'parents' : 'school';
     if (currentUser.role === 'gate') UI.schoolTab = 'salidas_hoy';
