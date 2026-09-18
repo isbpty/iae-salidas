@@ -24,6 +24,8 @@ test('parent sees only the family, plus the directory of account holders', async
   assert.equal(v.today, '2026-09-18');
   const laura = await t.view('u_p5');
   assert.deepEqual(laura.authorizedFor.map((x) => x.student.id), ['e1']);
+  assert.equal(laura.authorizedFor[0].createdByName, 'Carlos Rodríguez');
+  assert.ok(!('p1' in laura.persons), 'the titular who created the one-time authorization is not leaked to a merely-authorized parent');
   // Deviation from brief: r_h1 (seeded, studentId e3, requestedBy p5) is already in scope
   // alongside the new salida for e3, per the scope rule "requests whose studentId is in
   // scope" -- so Laura's scoped requests total 2, not 1.
@@ -47,6 +49,11 @@ test('teacher sees her grade, gate sees today approved salidas, monitor sees her
 
   const gate = await t.view('u_s6');
   assert.deepEqual(gate.requests.map((x) => x.id), [r.id]);
+  assert.deepEqual(gate.students.map((s) => s.id), ['e1'], 'only the student behind today\'s aprobada/retirado salidas, not the whole roster');
+  // Deviation from review-findings suggestion: e1's titulares are p1 AND p2 (both parents),
+  // so the scope rule (titulares of referenced students + requestedBy + pickupBy) yields
+  // {p1, p2, p3} -- not {p1, p3}. Verified against actual output.
+  assert.deepEqual(Object.keys(gate.persons).sort(), ['p1', 'p2', 'p3'], 'requester p1, co-titular p2, pickup p3 -- not the full family/staff directory');
   assert.equal(gate.persons.p3.cedula, '8-200-111');
   assert.ok(gate.notifications.some((n) => n.text.startsWith('Salida aprobada')));
   assert.equal(gate.authorizations.length, 0);

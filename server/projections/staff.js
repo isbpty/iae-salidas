@@ -8,32 +8,42 @@ export async function staffView(ctx) {
   const me = ctx.staff;
   const role = ctx.user.role;
   const everyone = await listStudents(ctx.q);
-  const students = can(ctx, 'todos_niveles') ? everyone : me.routeId ? everyone.filter((s) => s.routeId === me.routeId) : everyone.filter((s) => (me.grades || []).includes(s.grade));
-  const ids = students.map((s) => s.id);
   const today = todayOf(ctx);
-  let requests = [];
-  if (role === 'garita') requests = (await listRequests(ctx.q, { date: today, kind: 'salida' })).filter((r) => ['aprobada', 'retirado'].includes(r.status));
-  else if (can(ctx, 'ver_solicitudes') || can(ctx, 'ver_excusas')) {
-    requests = await listRequests(ctx.q, { studentIds: ids });
-    if (!can(ctx, 'ver_solicitudes')) requests = requests.filter((r) => r.kind !== 'salida');
-    if (!can(ctx, 'ver_excusas')) requests = requests.filter((r) => r.kind !== 'excusa');
+  let students, requests, authorizations;
+  if (role === 'garita') {
+    /* Gate sees only today's aprobada/retirado salidas, and only the students, requesters
+       and pickup persons those requests reference -- not the whole roster or its family data. */
+    requests = (await listRequests(ctx.q, { date: today, kind: 'salida' })).filter((r) => ['aprobada', 'retirado'].includes(r.status));
+    const referenced = new Set(requests.map((r) => r.studentId));
+    students = everyone.filter((s) => referenced.has(s.id));
+    authorizations = [];
+  } else {
+    students = can(ctx, 'todos_niveles') ? everyone : me.routeId ? everyone.filter((s) => s.routeId === me.routeId) : everyone.filter((s) => (me.grades || []).includes(s.grade));
+    const ids = students.map((s) => s.id);
+    requests = [];
+    if (can(ctx, 'ver_solicitudes') || can(ctx, 'ver_excusas')) {
+      requests = await listRequests(ctx.q, { studentIds: ids });
+      if (!can(ctx, 'ver_solicitudes')) requests = requests.filter((r) => r.kind !== 'salida');
+      if (!can(ctx, 'ver_excusas')) requests = requests.filter((r) => r.kind !== 'excusa');
+    }
+    authorizations = can(ctx, 'gestionar_autorizados') || can(ctx, 'ver_estudiantes') ? await listAuthorizations(ctx.q, { studentIds: ids }) : [];
   }
-  const authorizations = can(ctx, 'gestionar_autorizados') || can(ctx, 'ver_estudiantes') ? await listAuthorizations(ctx.q, { studentIds: ids }) : [];
   const all = await listPersons(ctx.q);
   const byId = Object.fromEntries(all.map((p) => [p.id, p]));
   const persons = {};
-  if (can(ctx, 'todos_niveles') && role !== 'garita') for (const p of all) persons[p.id] = publicPerson(p);
-  else {
+  if (role === 'garita') {
+    const wanted = new Set();
+    for (const s of students) for (const t of s.titulares) wanted.add(t);
+    for (const r of requests) { wanted.add(r.requestedBy); if (r.pickupBy) wanted.add(r.pickupBy); }
+    for (const id of wanted) if (byId[id]) persons[id] = publicPerson(byId[id]);
+  } else if (can(ctx, 'todos_niveles')) {
+    for (const p of all) persons[p.id] = publicPerson(p);
+  } else {
     const wanted = new Set();
     for (const s of students) for (const t of s.titulares) wanted.add(t);
     for (const a of authorizations) { wanted.add(a.personId); if (a.createdBy) wanted.add(a.createdBy); }
     for (const r of requests) { wanted.add(r.requestedBy); if (r.pickupBy) wanted.add(r.pickupBy); }
     for (const id of wanted) if (byId[id]) persons[id] = publicPerson(byId[id]);
-  }
-  if (role === 'garita') {
-    const referenced = new Set(requests.map((r) => r.studentId));
-    students.length = 0;
-    for (const s of everyone) if (referenced.has(s.id)) students.push(s);
   }
   const allRoutes = await listRoutes(ctx.q);
   const routes = can(ctx, 'ver_rutas') ? (me.routeId ? allRoutes.filter((r) => r.id === me.routeId) : allRoutes) : [];
