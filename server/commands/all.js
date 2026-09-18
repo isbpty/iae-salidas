@@ -5,4 +5,5 @@ import './attachments.js';
 import './authorizations.js';
 import './bus.js';
 import './whatsapp.js';
+import './admin.js';
 export {};
