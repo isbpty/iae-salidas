@@ -21,7 +21,7 @@
 - All user-facing text stays in Spanish and keeps the exact wording of the prototype (`app.js`) wherever the same message exists.
 - Secrets: `SESSION_SECRET` (≥ 32 chars) and `PILOT_PIN` are mandatory; `DATABASE_URL` is mandatory on Vercel and optional locally (PGlite fallback).
 - Static files served by the local server are only `/` (→ `index.html`) and `/client/<file>` where `<file>` has no path separators.
-- Tests are run with `npm test` = `node --test server/`. Every task ends with `npm test` green and a commit. Commit messages end with `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`.
+- Tests are run with `npm test` = `node --test "server/**/*.test.js"`. Every task ends with `npm test` green and a commit. Commit messages end with `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`.
 - Work happens on branch `connected-pilot` in `C:\Users\isaac\OneDrive - Rejovot\Documents\IAESalidas`. Existing files `app.js`, `seed.js`, `views.js`, `styles.css` are the porting sources and are deleted only in the final task.
 
 ## Deviations from the spec (decided while planning)
@@ -101,7 +101,7 @@
   "type": "module",
   "scripts": {
     "start": "node server/index.js",
-    "test": "node --test server/",
+    "test": "node --test \"server/**/*.test.js\"",
     "reset": "node -e \"import('node:fs').then(fs=>fs.rmSync('data/pglite',{recursive:true,force:true}))\""
   },
   "engines": { "node": ">=20" },
