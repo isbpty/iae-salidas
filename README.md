@@ -12,6 +12,13 @@ Demo de una plataforma de **salidas tempranas y excusas** para una escuela, con 
 
 Todo corre en el navegador, sin instalar nada. Los datos viven en `localStorage`; el botón **Reiniciar** vuelve a los datos de ejemplo.
 
+
+## Estado del producto
+
+Esta versión es un **prototipo de interfaz desconectado**. Sirve para probar el flujo y la experiencia, pero `localStorage` no comparte datos entre dispositivos y el simulador de WhatsApp no envía ni recibe mensajes reales. No debe usarse todavía para autorizar retiros reales.
+
+El diseño del piloto conectado, sus límites de seguridad, registros y despliegue están en [ARCHITECTURE.md](ARCHITECTURE.md).
+
 ## Cómo abrirlo
 
 Opción rápida: doble clic en `index.html`.
