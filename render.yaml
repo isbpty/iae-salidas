@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: iae-salidas-pilot
+    runtime: docker
+    plan: standard
+    healthCheckPath: /api/health
+    disk:
+      name: iae-whatsapp-session
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: iae-salidas-db
+          property: connectionString
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: PILOT_PIN
+        sync: false
+      - key: WHATSAPP_TRANSPORT
+        value: simulator
+      - key: WHATSAPP_SESSION_PATH
+        value: /data/whatsapp-session
+databases:
+  - name: iae-salidas-db
+    plan: basic-256mb
+    databaseName: iae_salidas
+    user: iae_salidas
+    ipAllowList: []
