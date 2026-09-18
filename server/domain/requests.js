@@ -17,6 +17,9 @@ async function uniqueCode(ctx, date) {
   for (;;) { const c = String(1000 + Math.floor(Math.random() * 9000)); if (!used.has(c)) return c; }
 }
 async function loadSalida(ctx, id) {
+  /* Lock the row for the rest of the transaction so two garita officers cannot both read
+     `aprobada` and both write a transition. */
+  await ctx.q.query('SELECT id FROM requests WHERE id=$1 FOR UPDATE', [id]);
   const req = await getRequest(ctx.q, id);
   if (!req) notFound('request_not_found');
   return req;

@@ -22,6 +22,7 @@ test('parent sees only the family, plus the directory of account holders', async
   assert.equal(v.staffNames.s6, 'Manuel Ortega');
   assert.equal(typeof v.serverNow, 'number');
   assert.equal(v.today, '2026-09-18');
+  assert.equal(v.realtime, 'sse', 'a long-lived listener can hold an EventSource open');
   const laura = await t.view('u_p5');
   assert.deepEqual(laura.authorizedFor.map((x) => x.student.id), ['e1']);
   assert.equal(laura.authorizedFor[0].createdByName, 'Carlos Rodríguez');
@@ -91,4 +92,19 @@ test('the HTTP view carries the same shape and updates after a command', async (
   assert.equal(forbidden.status, 403);
   assert.equal(forbidden.json.error, 'forbidden_role');
   await close(); await t.close();
+});
+
+test('a parent learns nothing new about an account holder they authorize', async () => {
+  const t = await makeTestApp();
+  await t.run('add_authorization', 'u_p7', { studentIds: ['e4'], mode: 'cuenta', personId: 'p1', type: 'siempre' });
+  const v = await t.view('u_p7');
+  assert.deepEqual(Object.keys(v.persons.p1).sort(), ['hasAccount', 'id', 'name', 'relation']);
+  for (const field of ['cedula', 'phone', 'docAttachmentId', 'docName']) assert.ok(!(field in v.persons.p1), field + ' stays with Carlos');
+  assert.equal(v.me.cedula, 'E-8-12345', 'own details are still there');
+  /* And the reverse view: Carlos keeps the full record of the people he is responsible for. */
+  const carlos = await t.view('u_p1');
+  assert.equal(carlos.persons.p3.cedula, '8-200-111', 'the grandmother he authorized, who has no account');
+  assert.equal(carlos.persons.p2.cedula, '8-702-456', 'his co-titular');
+  assert.ok(!('cedula' in carlos.persons.p5), 'Laura has her own account and her own family');
+  await t.close();
 });

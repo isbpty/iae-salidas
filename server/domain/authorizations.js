@@ -22,7 +22,9 @@ export async function addAuthorization(ctx, { studentIds, personId, newPerson, a
     await patchRow(ctx.q, 'attachments', att.id, { ownerPersonId: pid });
   } else {
     if (!(await getPerson(ctx.q, pid))) notFound('person_not_found');
-    if (att) { await patchRow(ctx.q, 'persons', pid, { docName: att.name, docAttachmentId: att.id }); await patchRow(ctx.q, 'attachments', att.id, { ownerPersonId: pid }); }
+    /* Only staff may replace the document of a person who already exists. A parent attaching a
+       file while authorizing somebody else would otherwise overwrite that person's cédula. */
+    if (att && creator.isStaff) { await patchRow(ctx.q, 'persons', pid, { docName: att.name, docAttachmentId: att.id }); await patchRow(ctx.q, 'attachments', att.id, { ownerPersonId: pid }); }
   }
   const p = await getPerson(ctx.q, pid);
   const created = [];

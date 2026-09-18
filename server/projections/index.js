@@ -15,6 +15,8 @@ export async function buildView(q, userId, env) {
     today: todayISO(ctx.now, ctx.tz),
     settings: ctx.settings,
     capabilities,
+    /* Serverless has no long-lived connection to hold an EventSource open, so the client polls. */
+    realtime: env.serverless ? 'poll' : 'sse',
     levels: await listLevels(q),
   };
   const builder = VIEW_BUILDERS[user.role];

@@ -1,4 +1,4 @@
-import { studentsOfPerson, listAuthorizations, listRequests, getSettings, getStaff, getStudent } from '../db/repo.js';
+import { studentsOfPerson, listAuthorizations, listRequests, getSettings, getStaff, getStudent, getPerson } from '../db/repo.js';
 import { todayISO } from '../domain/time.js';
 
 /* Who may open a stored document (cédula/foto of a pickup person or an excuse certificate). */
@@ -8,7 +8,12 @@ export async function canSeeAttachment(q, user, att, env) {
     if (att.ownerPersonId === user.refId) return true;
     const own = await studentsOfPerson(q, user.refId);
     if (own.some((s) => s.titulares.includes(att.ownerPersonId))) return true;
-    const auths = await listAuthorizations(q, { studentIds: own.map((s) => s.id), personId: att.ownerPersonId });
+    /* A parent sees the document of somebody authorized for their own student only while that
+       authorization stands, and only for people who have no account of their own: another
+       account holder's cédula is never theirs to open. */
+    const owner = await getPerson(q, att.ownerPersonId);
+    if (!owner || owner.hasAccount) return false;
+    const auths = await listAuthorizations(q, { studentIds: own.map((s) => s.id), personId: att.ownerPersonId, includeRevoked: false });
     return auths.length > 0;
   }
   const settings = await getSettings(q);

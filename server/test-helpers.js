@@ -9,6 +9,8 @@ import { runCommand } from './commands/run.js';
 import { buildView } from './projections/index.js';
 
 export const TZ = 'America/Panama';
+/* A 1x1 transparent PNG: the smallest upload the mime allowlist accepts. */
+export const PNG_1x1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
 export const CONFIG = { secret: 's'.repeat(32), pin: '4321', databaseUrl: null, dataDir: null, port: 0, serverless: false, secure: false };
 /* Friday 2026-09-18 10:30 in Panama: school hours, bus not on the road unless simulateBus. */
 export const NOW = new Date('2026-09-18T15:30:00Z');
@@ -26,7 +28,7 @@ export async function makeTestApp({ now = NOW } = {}) {
   return {
     db, deps, app, clock,
     run: (name, userId, input = {}) => runCommand(deps, { userId, name, input }),
-    view: (userId) => db.tx((q) => buildView(q, userId, { now: clock.now, transport: deps.transport, gps: deps.gps })),
+    view: (userId) => db.tx((q) => buildView(q, userId, { now: clock.now, transport: deps.transport, gps: deps.gps, serverless: false })),
     listen: async () => {
       const server = http.createServer(app.handler);
       await new Promise((r) => server.listen(0, '127.0.0.1', r));
