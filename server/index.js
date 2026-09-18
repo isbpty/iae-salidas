@@ -6,7 +6,7 @@ import { Store } from './store.js';
 import { connectedSeed } from './seed.js';
 import { checkout, createRequest, decideRequest } from './domain.js';
 import { simulateInbound } from './simulator.js';
-const ROOT = join(fileURLToPath(new URL('..', import.meta.url)), '..');
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const store = new Store(process.env.DATA_FILE || join(ROOT, 'data', 'pilot.json'));
 await store.load(connectedSeed());
 const clients = new Set();
@@ -30,5 +30,5 @@ const api = async (req,res,url) => {
   publish({type:'state.changed',actorId:user.id}); return json(res,200,result);
 };
 const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json; charset=utf-8'};
-const server=http.createServer(async(req,res)=>{ try { const url=new URL(req.url,'http://localhost'); if(url.pathname.startsWith('/api/')) return await api(req,res,url); const rel=url.pathname==='/'?'index.html':url.pathname.slice(1); const file=join(ROOT,normalize(rel)); if(!file.startsWith(ROOT)) return json(res,403,{error:'forbidden'}); const data=await readFile(file); res.writeHead(200,{'content-type':mime[extname(file)]||'application/octet-stream'}); res.end(data); } catch(e) { json(res,e.status||500,{error:e.message}); } });
+const server=http.createServer(async(req,res)=>{ try { const url=new URL(req.url,'http://localhost'); if(url.pathname.startsWith('/api/')) return await api(req,res,url); const rel=url.pathname==='/'?'pilot.html':url.pathname.slice(1); const file=join(ROOT,normalize(rel)); if(!file.startsWith(ROOT)) return json(res,403,{error:'forbidden'}); const data=await readFile(file); res.writeHead(200,{'content-type':mime[extname(file)]||'application/octet-stream'}); res.end(data); } catch(e) { json(res,e.status||500,{error:e.message}); } });
 server.listen(Number(process.env.PORT||3000),()=>console.log(`IAE connected pilot on http://localhost:${process.env.PORT||3000}`));
