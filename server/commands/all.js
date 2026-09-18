@@ -4,4 +4,5 @@ import './gate.js';
 import './attachments.js';
 import './authorizations.js';
 import './bus.js';
+import './whatsapp.js';
 export {};
