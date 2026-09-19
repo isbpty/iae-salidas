@@ -7,7 +7,9 @@
     "start": "node server/index.js",
     "dev": "node --env-file=.env server/index.js",
     "test": "node --test \"server/**/*.test.js\"",
-    "reset": "node -e \"import('node:fs').then(fs=>fs.rmSync('data/pglite',{recursive:true,force:true}))\""
+    "reset": "node -e \"import('node:fs').then(fs=>fs.rmSync('data/pglite',{recursive:true,force:true}))\"",
+    "seed:load": "node --env-file=.env server/db/seed-load-cli.js",
+    "load:test": "node --env-file=.env server/tools/load-test.js"
   },
   "engines": { "node": ">=20" },
   "dependencies": {

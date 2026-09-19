@@ -388,7 +388,9 @@ function schoolConfig() {
     '<label>Avance simulado del viaje: <b>' + Math.round(c.busProgress * 100) + '%</b> <input type="range" name="busProgress" min="0" max="100" value="' + Math.round(c.busProgress * 100) + '" data-change="busProgress"></label>' +
     '<label>Días para considerar "nueva" una autorización (aviso proactivo) <input type="number" name="newAuthDays" min="0" max="60" value="' + c.newAuthDays + '"></label></div>' +
     '<div class="card"><h3>Niveles y grados</h3>' + V.levels.map((l) => '<div class="small"><b>' + esc(l.name) + '</b>: ' + esc(l.grades.join(', ')) + '</div>').join('') + '</div>' +
-    '<button class="btn primary" type="submit">Guardar</button></form>';
+    '<button class="btn primary" type="submit">Guardar</button></form>' +
+    (ME.role === 'admin' ? '<div class="card" style="margin-top:14px"><h3>Datos de prueba a escala</h3><p class="small muted">Reinicia la base y genera familias ficticias (de 1 a 5 hijos, promedio 2.65) con titulares, autorizados con cédula, rutas de bus, docentes por grado y un historial de solicitudes. Útil para probar el sistema con el tamaño real de la escuela.</p>' +
+    '<div class="actions"><input type="number" id="loadCount" value="700" min="50" max="3000" style="width:110px"> estudiantes <button class="btn danger" data-action="seedLoad">⚗️ Cargar datos de prueba</button></div></div>' : '');
 }
 function schoolLog() {
   return '<h2>Bitácora</h2>' + logTable();
@@ -592,6 +594,12 @@ const ACTIONS = {
   setView(el) { UI.view = el.dataset.view; },
   logout() { doLogout(); },
   resetDemo() { if (confirm('¿Reiniciar el demo con los datos de ejemplo?')) run('reset_demo', {}, 'Demo reiniciado con datos de ejemplo').then(() => { UI.modal = null; render(); }); },
+  seedLoad() {
+    const n = Math.max(50, Math.min(3000, +(document.getElementById('loadCount') || {}).value || 700));
+    if (!confirm('Esto borra todos los datos actuales y carga ' + n + ' estudiantes de prueba. ¿Continuar?')) return;
+    setBadge('cargando datos…');
+    run('seed_load', { students: n }).then((c) => { if (c) toast('Cargados ' + c.students + ' estudiantes en ' + c.families + ' familias', 'ok'); });
+  },
   showGuide() { UI.modal = { type: 'guide' }; },
   closeModal() { UI.modal = null; },
   openModal(el) { UI.modal = { type: el.dataset.modal, data: { id: el.dataset.id } }; },

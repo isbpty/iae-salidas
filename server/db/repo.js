@@ -17,6 +17,18 @@ export async function insertRow(q, table, obj) {
   const marks = keys.map((_, i) => '$' + (i + 1)).join(', ');
   await q.query(`INSERT INTO ${table} (${cols}) VALUES (${marks})`, keys.map((k) => param(obj[k])));
 }
+/* Multi-row insert (chunks of 200) for the load seed; every row must carry the same keys. */
+export async function insertRows(q, table, rows) {
+  if (!rows.length) return;
+  const keys = Object.keys(rows[0]);
+  const cols = keys.map(snake).join(', ');
+  for (let i = 0; i < rows.length; i += 200) {
+    const chunk = rows.slice(i, i + 200);
+    const values = [];
+    const marks = chunk.map((row, r) => '(' + keys.map((k, c) => { values.push(param(row[k])); return '$' + (r * keys.length + c + 1); }).join(', ') + ')').join(', ');
+    await q.query(`INSERT INTO ${table} (${cols}) VALUES ${marks}`, values);
+  }
+}
 export async function patchRow(q, table, id, patch) {
   const keys = Object.keys(patch).filter((k) => patch[k] !== undefined);
   if (!keys.length) return;

@@ -2,6 +2,7 @@ import { register } from './index.js';
 import { requireCap, STAFF_ROLES } from './guards.js';
 import { getSettings, saveSettings, setPermission, getPermissions, markNotificationsRead } from '../db/repo.js';
 import { resetAll, seedDemo } from '../db/seed.js';
+import { seedLoad } from '../db/seed-load.js';
 import { logEvent } from '../domain/notifications.js';
 import { roleName } from '../domain/text.js';
 import { badRequest } from '../domain/errors.js';
@@ -61,6 +62,19 @@ register({
       await resetAll(ctx.q);
       const revision = await seedDemo(ctx.q, { now: ctx.now, tz: ctx.tz });
       return { revision };
+    },
+  },
+  /* Datos de prueba a escala: reinicia y carga N estudiantes generados encima del seed base. */
+  seed_load: {
+    roles: ['admin'],
+    handler: async (ctx, input) => {
+      const students = clampInt(input.students, 50, 3000, 700);
+      const seed = clampInt(input.seed, 1, 1e9, 7);
+      await resetAll(ctx.q);
+      await seedDemo(ctx.q, { now: ctx.now, tz: ctx.tz });
+      const counts = await seedLoad(ctx.q, { students, seed, now: ctx.now, tz: ctx.tz });
+      await logEvent(ctx, 'Cargó datos de prueba: ' + counts.students + ' estudiantes en ' + counts.families + ' familias', ctx.staff.name);
+      return counts;
     },
   },
   mark_notifications_read: {
