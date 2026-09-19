@@ -42,7 +42,7 @@ export async function seedLoad(q, { students = 700, seed = 7, now, tz }) {
   const phone = () => { for (;;) { const p = `+507 6${100 + Math.floor(r() * 900)}-${1000 + Math.floor(r() * 9000)}`; if (!usedPhone.has(p)) { usedPhone.add(p); return p; } } };
 
   /* Rutas y monitoras extra (r3..r8) */
-  const routes = [], stops = [], staff = [], users = [];
+  const routes = [], stops = [], staff = [];
   ROUTE_NAMES.forEach(([name, zone], i) => {
     const id = 'rl_' + (i + 3);
     const monitor = { id: 'sml_' + (i + 3), name: pick(r, ADULTS_F) + ' ' + pick(r, SURNAMES), role: 'monitora', title: 'Monitora · ' + name, routeId: id };
@@ -56,7 +56,7 @@ export async function seedLoad(q, { students = 700, seed = 7, now, tz }) {
     if (['Kínder', '3°', '9°'].includes(grade)) continue;
     staff.push({ id: 'stl_' + grade.replace('°', ''), name: 'Prof. ' + pick(r, [...ADULTS_M, ...ADULTS_F]) + ' ' + pick(r, SURNAMES), role: 'profesor', title: `Docente ${grade} ${level[0].toUpperCase() + level.slice(1)}`, grades: [grade] });
   }
-  for (const s of staff) users.push({ id: 'u_' + s.id, kind: 'staff', refId: s.id, name: s.name, role: s.role });
+  /* Sin logins nuevos: el juego de usuarios (padres, autorizados y personal) sigue siendo el del seed base. */
 
   /* Familias */
   const persons = [], attachments = [], studentsRows = [], guardianships = [], authorizations = [], requests = [], events = [];
@@ -69,10 +69,10 @@ export async function seedLoad(q, { students = 700, seed = 7, now, tz }) {
     const familyId = 'fl_' + (fi + 1);
     const surname = pick(r, SURNAMES), surname2 = pick(r, SURNAMES);
     const twoParents = r() < 0.85;
-    const dad = { id: next('pl'), name: pick(r, ADULTS_M) + ' ' + surname, phone: phone(), cedula: cedula(), relation: 'Papá', hasAccount: true };
-    const mom = { id: next('pl'), name: pick(r, ADULTS_F) + ' ' + surname2, phone: phone(), cedula: cedula(), relation: 'Mamá', hasAccount: true };
+    const dad = { id: next('pl'), name: pick(r, ADULTS_M) + ' ' + surname, phone: phone(), cedula: cedula(), relation: 'Papá', hasAccount: false };
+    const mom = { id: next('pl'), name: pick(r, ADULTS_F) + ' ' + surname2, phone: phone(), cedula: cedula(), relation: 'Mamá', hasAccount: false };
     const titulares = twoParents ? [dad, mom] : [r() < 0.7 ? mom : dad];
-    for (const p of titulares) { persons.push(p); users.push({ id: 'u_' + p.id, kind: 'person', refId: p.id, name: p.name, role: 'parent' }); }
+    for (const p of titulares) persons.push(p);
     const onBus = r() < 0.4; const routeId = onBus ? pick(r, allRouteIds) : null; const stopId = routeId ? pick(r, stopsByRoute[routeId].slice(1)) : null;
     const kids = [];
     for (let k = 0; k < size; k++) {
@@ -120,12 +120,11 @@ export async function seedLoad(q, { students = 700, seed = 7, now, tz }) {
   await insertRows(q, 'persons', norm(persons, ['id', 'name', 'phone', 'cedula', 'relation', 'hasAccount', 'docName', 'docAttachmentId']));
   await insertRows(q, 'students', norm(studentsRows, ['id', 'name', 'grade', 'levelId', 'emoji', 'familyId', 'routeId', 'stopId', 'busLegs']));
   await insertRows(q, 'guardianships', guardianships);
-  await insertRows(q, 'users', norm(users, ['id', 'kind', 'refId', 'name', 'role']));
   await insertRows(q, 'authorizations', norm(authorizations, ['id', 'studentId', 'personId', 'type', 'validFrom', 'validTo', 'createdBy', 'createdAt']));
   await insertRows(q, 'requests', norm(requests, ['id', 'kind', 'studentId', 'requestedBy', 'pickupBy', 'pickupKind', 'date', 'time', 'reason', 'excusaType', 'channel', 'status', 'pickupPoint', 'code', 'decidedBy', 'decidedAt', 'autoApproved', 'exitAt', 'exitBy', 'createdAt']));
   await insertRows(q, 'request_events', events);
   await q.query("INSERT INTO app_meta(id, value) VALUES ('revision', 1) ON CONFLICT (id) DO UPDATE SET value = app_meta.value + 1");
 
-  Object.assign(counts, { families: sizes.length, students: studentsRows.length, persons: persons.length, users: users.length, authorizations: authorizations.length, requests: requests.length, staff: staff.length, routes: routes.length, revision: await getRevision(q) });
+  Object.assign(counts, { families: sizes.length, students: studentsRows.length, persons: persons.length, users: 0, authorizations: authorizations.length, requests: requests.length, staff: staff.length, routes: routes.length, revision: await getRevision(q) });
   return counts;
 }

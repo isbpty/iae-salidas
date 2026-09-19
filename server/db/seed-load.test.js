@@ -38,11 +38,9 @@ test('seedLoad adds 700 consistent students on top of the base seed and stays de
   const dupPhone = await t.db.query('SELECT phone, count(*)::int AS c FROM persons WHERE phone IS NOT NULL GROUP BY phone HAVING count(*) > 1');
   assert.equal(dupPhone.length, 0);
 
-  /* Every generated parent can log in and sees only their family */
-  const [u] = await t.db.query("SELECT id, ref_id FROM users WHERE id LIKE 'u_pl_%' ORDER BY id LIMIT 1");
-  const view = await t.view(u.id);
-  assert.ok(view.students.length >= 1 && view.students.length <= 5);
-  assert.ok(view.students.every((s) => s.titulares.includes(u.ref_id)));
+  /* No new logins: the demo keeps the base set of accounts (5 parents + 8 staff) */
+  assert.equal((await t.db.query("SELECT count(*)::int AS c FROM users"))[0].c, 13);
+  assert.equal((await t.db.query("SELECT count(*)::int AS c FROM persons WHERE has_account"))[0].c, 5);
   const rec = await t.view('u_s2');
   assert.equal(rec.students.length, 704);
   assert.ok(rec.requests.length > 40, 'history and pending load for reception: ' + rec.requests.length);
