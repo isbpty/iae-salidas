@@ -9,8 +9,9 @@ export function loadConfig(env = process.env) {
   return {
     secret,
     pin,
-    /* The shared pilot PIN stays on unless PILOT_PIN_SHARED=false; testers always have their own. */
-    sharedPin: env.PILOT_PIN_SHARED !== 'false',
+    /* The shared pilot PIN is OFF by default (every real person has a tester PIN); PILOT_PIN_SHARED=true turns it on
+       for local development, the load test and the very first create_testers. */
+    sharedPin: env.PILOT_PIN_SHARED === 'true',
     /* Second key for the separate super admin page (/super). Empty = that page cannot be opened. */
     superKey: env.SUPER_KEY || '',
     databaseUrl,

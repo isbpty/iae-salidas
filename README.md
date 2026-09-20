@@ -16,7 +16,15 @@ npm run reset          # borra la base local; al arrancar se vuelve a sembrar
 
 Sin `DATABASE_URL` el servidor usa PGlite (Postgres embebido). Con `DATABASE_URL` (Neon u otro Postgres) usa `pg`.
 
-## Usuarios del demo (PIN único: el de `PILOT_PIN`)
+## Entrar: probadores con PIN propio
+
+Cada persona real que prueba el piloto es un **probador** con su PIN de 6 dígitos (10 probadores, `t1` es el super admin). El login tiene dos pasos: primero el PIN (dice quién prueba), luego el usuario del demo con el que se quiere entrar. "Cambiar usuario" cambia de usuario sin volver a pedir el PIN. El PIN compartido de `PILOT_PIN` está apagado salvo que `PILOT_PIN_SHARED=true` (útil en local y para crear los probadores la primera vez con `POST /api/commands/create_testers` como Administración).
+
+`/super` es una página aparte para el super admin: pide el PIN de `t1` **y** la clave `SUPER_KEY`. Ahí se ve qué hace cada probador (pantallas, tiempo, acciones, errores, uso del simulador), se exporta CSV y se regeneran PINs.
+
+El botón **▶ Simulador** recorre el guion del demo manejando la app de verdad, con explicación, foco, play/pausa, paso a paso y velocidad.
+
+## Usuarios del demo
 
 | Usuario | Rol | Qué ve |
 |---|---|---|

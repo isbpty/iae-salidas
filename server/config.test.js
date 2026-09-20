@@ -14,6 +14,8 @@ test('loadConfig requires PILOT_PIN', () => {
 });
 
 test('loadConfig falls back to PGlite locally but requires DATABASE_URL on Vercel', () => {
+  assert.equal(loadConfig(good).sharedPin, false, 'shared PIN is off unless asked for');
+  assert.equal(loadConfig({ ...good, PILOT_PIN_SHARED: 'true' }).sharedPin, true);
   const local = loadConfig(good);
   assert.equal(local.databaseUrl, null);
   assert.equal(local.dataDir, 'data/pglite');
