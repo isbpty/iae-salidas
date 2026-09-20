@@ -80,7 +80,7 @@ export async function summary(q, f = {}, now = new Date()) {
     const t = testers.find((x) => x.id === id);
     return { id: id || 'shared', name: testerName(id || null), super: !!(t && t.super), active: t ? t.active : true, lastAt: lastAt ? lastAt.toISOString() : null,
       sessions: s.sessions, activeMs: s.activeMs, actions: num(l.actions), errors: num(l.errors), events: num(l.events), online: !!lastAt && now.getTime() - lastAt.getTime() < ONLINE_MS };
-  }).sort((a, b) => (b.lastAt || '').localeCompare(a.lastAt || '') || a.id.localeCompare(b.id));
+  }).sort((a, b) => (b.lastAt || '').localeCompare(a.lastAt || '') || (parseInt(a.id.slice(1), 10) || 999) - (parseInt(b.id.slice(1), 10) || 999));
 
   const p2 = []; const w2 = where(f, p2);
   const screens = (await q.query(`SELECT screen, count(*)::int AS visits, coalesce(sum(duration_ms), 0)::bigint AS total_ms

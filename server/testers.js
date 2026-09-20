@@ -18,7 +18,7 @@ export function verifyPin(pin, stored) {
 }
 
 const safe = ({ pinHash, ...t }) => t;
-export const listTesters = async (q) => (await q.query('SELECT * FROM testers ORDER BY id')).map((r) => safe(camel(r)));
+export const listTesters = async (q) => (await q.query('SELECT * FROM testers ORDER BY length(id), id')).map((r) => safe(camel(r)));
 export const getTester = async (q, id) => { const r = (await q.query('SELECT * FROM testers WHERE id=$1', [id]))[0]; return r ? safe(camel(r)) : null; };
 export const countTesters = async (q) => (await q.query('SELECT count(*)::int AS c FROM testers'))[0].c;
 

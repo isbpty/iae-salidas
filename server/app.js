@@ -212,6 +212,8 @@ export function createApp(deps) {
     const status = res.statusCode || 0;
     const ok = status < 400;
     const kind = c.kind === 'login' && !ok ? 'login_failed' : c.kind;
+    /* Anonymous polls (a 401 before logging in) are noise, not activity. Failed logins do count. */
+    if (!act.user && !['login', 'login_failed', 'pin'].includes(kind)) return;
     const s = act.session || {};
     await recordServerEvent(db, {
       at: startedAt, testerId: s.testerId || null, userId: act.user ? act.user.id : null, role: act.user ? act.user.role : null, sid: s.sid || null,

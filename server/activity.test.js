@@ -20,8 +20,8 @@ test('maskInput hides secrets, shortens bulk fields and truncates long strings',
 test('every API request leaves a server event with who, what, duration and outcome', async () => {
   const t = await makeTestApp(); const { base, close } = await t.listen();
   const { result: made } = await t.run('create_testers', 'u_s1');
-  await call(base, '/api/health'); await call(base, '/api/auth/options');
-  assert.equal((await rows(t)).length, 0, 'health and options are not recorded');
+  await call(base, '/api/health'); await call(base, '/api/auth/options'); await call(base, '/api/me/view');
+  assert.equal((await rows(t)).length, 0, 'health, options and anonymous polls are not recorded');
 
   assert.equal((await post(base, '/api/auth/login', { userId: 'u_p1', pin: 'wrong' })).status, 401);
   const login = await post(base, '/api/auth/login', { userId: 'u_p1', pin: made[4].pin });

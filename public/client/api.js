@@ -23,7 +23,11 @@ const api = (() => {
   const readDataUrl = (file) => new Promise((resolve, reject) => { const fr = new FileReader(); fr.onload = () => resolve(fr.result); fr.onerror = reject; fr.readAsDataURL(file); });
   return {
     options: () => req('/api/auth/options'),
-    login: (userId, pin) => req('/api/auth/login', { method: 'POST', body: JSON.stringify({ userId, pin }) }),
+    /* Paso 1: el PIN identifica al probador y devuelve la lista de usuarios. Paso 2: usuario + prueba del PIN. */
+    pin: (pin) => req('/api/auth/pin', { method: 'POST', body: JSON.stringify({ pin }) }),
+    login: (userId, proof) => req('/api/auth/login', { method: 'POST', body: JSON.stringify({ userId, ...(typeof proof === 'string' ? { pin: proof } : proof) }) }),
+    switchUser: (userId) => req('/api/auth/switch', { method: 'POST', body: JSON.stringify({ userId }) }),
+    activity: (what, params) => req('/api/activity/' + what + (params && params.toString() ? '?' + params.toString() : '')),
     logout: () => req('/api/auth/logout', { method: 'POST' }),
     view: (etag) => req('/api/me/view', { headers: etag ? { 'if-none-match': etag } : {} }),
     command: (name, input) => req('/api/commands/' + name, { method: 'POST', body: JSON.stringify(input || {}) }),

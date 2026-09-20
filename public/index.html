@@ -15,6 +15,7 @@
       <span id="clock" class="muted mono"></span>
       <button class="btn ghost" data-action="showGuide">📖 Guion</button>
       <button class="btn ghost danger" data-action="resetDemo" id="resetBtn" style="display:none">↺ Reiniciar</button>
+      <button class="btn ghost" data-action="switchUser" id="switchBtn" style="display:none">🔁 Cambiar usuario</button>
       <button class="btn ghost" data-action="logout" id="logoutBtn" style="display:none">Salir</button>
     </div>
   </header>
@@ -24,9 +25,11 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <script src="client/format.js"></script>
   <script src="client/api.js"></script>
+  <script src="client/telemetry.js"></script>
   <script src="client/state.js"></script>
   <script src="client/model.js"></script>
   <script src="client/qr.js"></script>
+  <script src="client/activity.js"></script>
   <script src="client/views.js"></script>
 </body>
 </html>

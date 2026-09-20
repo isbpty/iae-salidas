@@ -214,3 +214,30 @@ select.inline { padding: 5px 8px; border-radius: 8px; border: 1px solid var(--li
   .cols, .kpis { grid-template-columns: 1fr 1fr; }
   .phone { width: 100%; max-width: 390px; }
 }
+
+/* ---------- Panel Actividad (super admin) ---------- */
+h2 .right { float: right; font-size: 13px; font-weight: 400; }
+.ok-text { color: var(--ok); }
+.act-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.act-card { cursor: pointer; margin: 0; }
+.act-card:hover { border-color: var(--primary); }
+.act-card.selected { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(31, 94, 255, .15); }
+.act-head { display: flex; align-items: center; gap: 6px; }
+.act-dot { width: 10px; height: 10px; border-radius: 999px; background: #cbd5e1; display: inline-block; }
+.act-dot.on { background: var(--ok); box-shadow: 0 0 0 3px rgba(22, 163, 74, .2); }
+.act-dot.today { background: var(--warn); }
+.act-stats { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; color: var(--muted); margin-top: 6px; }
+.act-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.act-cols h3 { margin: 6px 0 8px; font-size: 14px; }
+@media (max-width: 900px) { .act-cols { grid-template-columns: 1fr; } }
+.bar { height: 5px; background: #eef0f4; border-radius: 3px; margin-top: 4px; overflow: hidden; }
+.bar-fill { height: 100%; background: var(--primary); border-radius: 3px; }
+.bar-fill.info { background: var(--info); }
+.tbl tr.bad td { background: #fff5f5; }
+.tbl tr.selected td { background: #eef3ff; }
+.act-events td { padding: 5px 8px; }
+.pin-box { background: #fefce8; border: 1px solid #fde68a; border-radius: 8px; padding: 10px 12px; margin: 8px 0; }
+.pin-box .big { font-size: 22px; letter-spacing: .15em; font-weight: 700; }
+.filters select, .filters input[type=date], .filters input[type=search] { border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; font-size: 12px; background: #fff; }
+.filters label.check { display: inline-flex; align-items: center; gap: 4px; }
+@media (max-width: 700px) { h2 .right { float: none; display: block; margin-top: 6px; } .act-grid { grid-template-columns: 1fr 1fr; } }
