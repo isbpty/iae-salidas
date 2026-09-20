@@ -43,7 +43,6 @@ function render() {
   const chat = document.getElementById('waChat');
   if (chat) chat.scrollTop = chat.scrollHeight;
   T.screen(currentScreen());
-  if (!(UI.view === 'school' && UI.schoolTab === 'actividad')) activityTimer(false);
   const now = serverNow();
   const pend = Object.values(allChats()).flat().filter((m) => m.pendingUntil && m.pendingUntil > now).map((m) => m.pendingUntil);
   clearTimeout(pendingTimer);
@@ -249,10 +248,8 @@ const SCHOOL_TABS = [
   ['personal', '🧑‍🏫 Personal y permisos', 'personal'],
   ['config', '⚙️ Configuración', 'config'],
   ['bitacora', '📜 Bitácora', 'bitacora'],
-  ['actividad', '📊 Actividad', 'super'],
 ];
-/* 'super' no es un permiso de rol: solo lo tiene el probador super admin (viene en la cookie). */
-function availableTabs(staff) { return SCHOOL_TABS.filter(([, , cap]) => !cap || (cap === 'super' ? !!ME.super : staffCan(cap))); }
+function availableTabs(staff) { return SCHOOL_TABS.filter(([, , cap]) => !cap || staffCan(cap)); }
 function viewSchool() {
   const staff = V.me;
   const tabs = availableTabs(staff);
@@ -260,12 +257,12 @@ function viewSchool() {
   const unread = V.unread;
   const body = {
     inicio: schoolHome, solicitudes: schoolRequests, salidas_hoy: schoolGate, rutas: schoolRutas, excusas: schoolExcusas, estudiantes: schoolStudents,
-    autorizados: schoolAuths, personal: schoolStaff, config: schoolConfig, bitacora: schoolLog, actividad: activityView,
+    autorizados: schoolAuths, personal: schoolStaff, config: schoolConfig, bitacora: schoolLog,
   }[UI.schoolTab](staff);
   const scope = staff.routeId ? '<span class="muted">solo ' + esc((route(staff.routeId) || {}).name || staff.routeId) + '</span>' : staff.grades ? '<span class="muted">grados: ' + esc(staff.grades.join(', ')) + '</span>' : '<span class="muted">todos los niveles</span>';
   return '<div class="dash"><aside class="side"><div class="side-brand">🏫 ' + esc(V.settings.school.short) + ' Salidas<div class="small muted">' + esc(V.settings.school.name) + '</div></div>' +
     '<div class="side-user"><label class="small muted">Usuario</label><div><b>' + esc(staff.name) + '</b></div>' +
-    (V.tester && V.tester.id ? '<div class="small muted">Probador: ' + esc(V.tester.name) + (ME.super ? ' · super' : '') + '</div>' : '') +
+    (V.tester && V.tester.id ? '<div class="small muted">Probador: ' + esc(V.tester.name) + '</div>' : '') +
     '<div class="small"><span class="badge role-' + staff.role + '">' + esc(roleName(staff.role)) + '</span> ' + scope + '</div></div>' +
     '<nav class="side-nav">' + tabs.map(([k, l]) => '<button class="' + (UI.schoolTab === k ? 'active' : '') + '" data-action="schoolTab" data-tab="' + k + '">' + l + (k === 'inicio' && unread ? '<span class="dot">' + unread + '</span>' : '') + '</button>').join('') + '</nav></aside>' +
     '<section class="content">' + body + '</section></div>';
@@ -647,7 +644,6 @@ const ACTIONS = {
   board(el) { run('mark_boarding', { routeId: el.dataset.route, leg: el.dataset.leg, studentId: el.dataset.id, status: el.dataset.status, stopId: el.dataset.stop || null }); },
   tripStatus(el) { run('set_trip_status', { routeId: el.dataset.route, leg: el.dataset.leg, status: el.dataset.status }); },
 };
-Object.assign(ACTIONS, ACTIVITY_ACTIONS);
 function onClick(e) {
   const el = e.target.closest('[data-action]');
   if (!el) {
@@ -723,7 +719,6 @@ function onChange(e) {
   const el = e.target.closest('[data-change]');
   if (!el || !V) return;
   const k = el.dataset.change;
-  if (k.startsWith('act')) { activityChange(el); return; }
   if (k === 'setPhone') { UI.phoneId = el.value; render(); return; }
   if (k === 'busProgress') { const b = el.closest('label').querySelector('b'); if (b) b.textContent = el.value + '%'; return; } // se guarda con "Guardar"
   if (k === 'togglePerm') { run('set_permission', { role: el.dataset.role, capability: el.dataset.cap, allowed: el.checked }); return; }

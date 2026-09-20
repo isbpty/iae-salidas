@@ -24,7 +24,7 @@ test('two-step login: the PIN names the tester, the second step picks the demo u
   assert.equal(session.userId, 'u_p1'); assert.equal(session.testerId, 't2'); assert.equal(session.super, false); assert.match(session.sid, /^[0-9a-f]{16}$/);
   const cookie = cookieOf(login);
   const view = (await call(base, '/api/me/view', { cookie })).json.view;
-  assert.equal(view.user.super, false); assert.deepEqual(view.tester, { id: 't2', name: 'Probador 2', super: false });
+  assert.equal(view.user.super, undefined, 'the app never learns who is super'); assert.deepEqual(view.tester, { id: 't2', name: 'Probador 2', super: false });
 
   /* tampered or foreign token */
   assert.equal((await post(base, '/api/auth/login', { userId: 'u_p1', pinToken: step1.pinToken + 'x' })).status, 401);
@@ -35,7 +35,8 @@ test('two-step login: the PIN names the tester, the second step picks the demo u
   assert.equal(sup.tester.super, true);
   const supLogin = await post(base, '/api/auth/login', { userId: 'u_s1', pinToken: sup.pinToken });
   const supView = (await call(base, '/api/me/view', { cookie: cookieOf(supLogin) })).json.view;
-  assert.equal(supView.user.super, true); assert.equal(supView.tester.name, 'Super admin');
+  assert.equal(supView.tester.name, 'Super admin');
+  assert.equal((await call(base, '/api/activity/summary', { cookie: cookieOf(supLogin) })).status, 401, 'an app session, even the super tester, cannot read the panel');
 
   /* switch keeps tester and sid */
   const sw = await post(base, '/api/auth/switch', { userId: 'u_s2' }, cookie);
@@ -66,20 +67,12 @@ test('one-step login accepts a tester PIN or the shared PIN; shared can be disab
   await s2.close(); await t2.close();
 });
 
-test('tester commands: first creation from the shared PIN, everything after needs super', async () => {
+test('create_testers runs once from the shared PIN and never again', async () => {
   const t = await makeTestApp();
   await assert.rejects(t.run('create_testers', 'u_s2'), /forbidden_role/);
   const { result: made } = await t.run('create_testers', 'u_s1');
   assert.equal(made.length, 10);
-  await assert.rejects(t.run('create_testers', 'u_s1'), /forbidden_super/);
-  assert.deepEqual((await t.run('create_testers', 'u_s1', {}, { super: true })).result, [], 'already created');
-  await assert.rejects(t.run('regenerate_tester_pin', 'u_s1', { testerId: 't2' }), /forbidden_super/);
-  const { result: re } = await t.run('regenerate_tester_pin', 'u_s1', { testerId: 't2' }, { super: true });
-  assert.match(re.pin, /^\d{6}$/); assert.notEqual(re.pin, made[1].pin);
-  await assert.rejects(t.run('regenerate_tester_pin', 'u_s1', { testerId: 'zz' }, { super: true }), /tester_not_found/);
-  assert.equal((await t.run('rename_tester', 'u_s1', { testerId: 't2', name: '  Ana  ' }, { super: true })).result.name, 'Ana');
-  await assert.rejects(t.run('rename_tester', 'u_s1', { testerId: 't2', name: '' }, { super: true }), /name_required/);
-  assert.equal((await t.run('purge_activity', 'u_s1', { beforeDays: 0 }, { super: true })).result.deleted, 0);
+  await assert.rejects(t.run('create_testers', 'u_s1'), /testers_exist/);
   const audit = await t.db.query("SELECT summary FROM audit_log WHERE summary LIKE '%probadores%'");
   assert.equal(audit.length, 1);
   await t.close();

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { makeTestApp, call, loginAs } from './test-helpers.js';
+import { makeTestApp, call, loginAs, loginSuper } from './test-helpers.js';
 import { insertRows } from './db/repo.js';
 import { summary, events, exportCsv } from './activity-queries.js';
 
@@ -73,19 +73,20 @@ test('summary derives sessions with a 10 minute gap and aggregates hot spots', a
   await t.close();
 });
 
-test('activity routes need the super session', async () => {
+test('activity routes answer only to the /super cookie', async () => {
   const t = await makeTestApp(); const { base, close } = await t.listen();
   const { result: made } = await t.run('create_testers', 'u_s1');
   const admin = await loginAs(base, 'u_s1');
-  assert.equal((await call(base, '/api/activity/summary', { cookie: admin })).status, 403, 'admin with the shared PIN is not super');
-  const other = await loginAs(base, 'u_s1', made[1].pin);
-  assert.equal((await call(base, '/api/activity/summary', { cookie: other })).status, 403);
-  const sup = await loginAs(base, 'u_s1', made[0].pin);
+  assert.equal((await call(base, '/api/activity/summary', { cookie: admin })).status, 401, 'an app session is not a super session');
+  const superTester = await loginAs(base, 'u_s1', made[0].pin);
+  assert.equal((await call(base, '/api/activity/summary', { cookie: superTester })).status, 401);
+  const sup = await loginSuper(base, made[0].pin);
   const s = await call(base, '/api/activity/summary?testerId=t1', { cookie: sup });
   assert.equal(s.status, 200); assert.ok(s.json.testers.find((x) => x.id === 't1').sessions >= 1, 'the super login itself is recorded');
   assert.equal((await call(base, '/api/activity/events?limit=2', { cookie: sup })).json.events.length, 2);
   assert.equal((await call(base, '/api/activity/testers', { cookie: sup })).json.length, 10);
   assert.ok(!(await call(base, '/api/activity/testers', { cookie: sup })).text.includes('scrypt'), 'no hashes leave the server');
+  assert.equal((await call(base, '/api/activity/me', { cookie: sup })).json.users.length, 13);
   const csv = await call(base, '/api/activity/export.csv', { cookie: sup });
   assert.equal(csv.status, 200); assert.match(csv.headers.get('content-type'), /text\/csv/); assert.ok(csv.text.includes('auth/login'));
   assert.equal((await call(base, '/api/activity/nope', { cookie: sup })).status, 404);

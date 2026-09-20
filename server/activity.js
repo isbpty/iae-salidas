@@ -27,6 +27,9 @@ export function maskInput(value, depth = 0) {
 /* Which API paths get a server event, and how it is named. `null` = not recorded (noise or long-lived). */
 export function classify(path, method) {
   if (path === 'auth/pin') return { kind: 'pin', name: 'auth/pin' };
+  if (path === 'auth/super') return { kind: 'super_login', name: 'auth/super' };
+  if (path === 'auth/super/logout') return { kind: 'super_logout', name: 'auth/super/logout' };
+  if (path.startsWith('super/')) return { kind: 'super_action', name: path };
   if (path === 'auth/login') return { kind: 'login', name: 'auth/login' };
   if (path === 'auth/logout') return { kind: 'logout', name: 'auth/logout' };
   if (path === 'auth/switch') return { kind: 'switch_user', name: 'auth/switch' };

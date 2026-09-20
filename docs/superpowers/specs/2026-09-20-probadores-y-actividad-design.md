@@ -66,6 +66,14 @@ depurar "zonas calientes" después.
 
 ## 3 · Panel "Actividad" (solo super)
 
+> **Cambio 2026-09-20 (tarde), pedido por el usuario:** el panel NO vive dentro de la app. Es una página aparte, `/super`
+> (`public/super.html` + `public/client/super.js`), con acceso propio: PIN de super admin **y** una segunda clave
+> `SUPER_KEY` (variable de entorno). `POST /api/auth/super { pin, key }` emite la cookie `iae_super` (1 h, Path=/api),
+> independiente de la sesión de la app; `/api/activity/*` y `/api/super/{regenerate,rename,purge}` solo aceptan esa cookie.
+> La sesión de la app ya no lleva `super` y ningún usuario de la app ve la pestaña. `create_testers` sigue siendo el
+> único comando de la app (solo la primera vez). Lo que sigue describe el panel tal como se diseñó originalmente.
+
+
 - API (todas exigen `super` en la cookie; 403 si no):
   - `GET /api/activity/summary?from&to&testerId&userId&role&errorsOnly` →
     `{ testers: [{ id, name, lastAt, sessions, activeMs, actions, errors, online }], screens: [{ screen, visits, totalMs }],

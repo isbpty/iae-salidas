@@ -3,6 +3,7 @@
   "outputDirectory": "public",
   "functions": { "api/index.js": { "includeFiles": "server/**", "maxDuration": 15 } },
   "rewrites": [
+    { "source": "/super", "destination": "/super.html" },
     { "source": "/api/:path*", "destination": "/api?path=:path*" }
   ],
   "headers": [

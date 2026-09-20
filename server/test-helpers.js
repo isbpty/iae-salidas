@@ -11,7 +11,7 @@ import { buildView } from './projections/index.js';
 export const TZ = 'America/Panama';
 /* A 1x1 transparent PNG: the smallest upload the mime allowlist accepts. */
 export const PNG_1x1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
-export const CONFIG = { secret: 's'.repeat(32), pin: '4321', sharedPin: true, databaseUrl: null, dataDir: null, port: 0, serverless: false, secure: false };
+export const CONFIG = { secret: 's'.repeat(32), pin: '4321', sharedPin: true, superKey: 'clave-super-test', databaseUrl: null, dataDir: null, port: 0, serverless: false, secure: false };
 /* Friday 2026-09-18 10:30 in Panama: school hours, bus not on the road unless simulateBus. */
 export const NOW = new Date('2026-09-18T15:30:00Z');
 
@@ -27,7 +27,7 @@ export async function makeTestApp({ now = NOW, config = {} } = {}) {
   const app = createApp(deps);
   return {
     db, deps, app, clock,
-    run: (name, userId, input = {}, opts = {}) => runCommand(deps, { userId, name, input, ...opts }),
+    run: (name, userId, input = {}) => runCommand(deps, { userId, name, input }),
     view: (userId) => db.tx((q) => buildView(q, userId, { now: clock.now, transport: deps.transport, gps: deps.gps, serverless: false })),
     listen: async () => {
       const server = http.createServer(app.handler);
@@ -48,5 +48,12 @@ export async function call(base, path, { method = 'GET', body, cookie, headers =
 }
 export async function loginAs(base, userId, pin = '4321') {
   const r = await call(base, '/api/auth/login', { method: 'POST', body: { userId, pin } });
+  return r.headers.get('set-cookie').split(';')[0];
+}
+
+/* The /super page: super admin PIN + SUPER_KEY → its own cookie. */
+export async function loginSuper(base, pin, key = 'clave-super-test') {
+  const r = await call(base, '/api/auth/super', { method: 'POST', body: { pin, key } });
+  if (r.status !== 200) throw new Error('super login failed: ' + r.status + ' ' + (r.json && r.json.error));
   return r.headers.get('set-cookie').split(';')[0];
 }

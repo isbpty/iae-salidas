@@ -3,10 +3,10 @@ import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HttpError } from './domain/errors.js';
 import { randomBytes } from 'node:crypto';
-import { cookieValue, sessionToken, verifySession, pinToken, verifyPinToken } from './session.js';
+import { cookieValue, sessionToken, verifySession, pinToken, verifyPinToken, signToken, verifyToken } from './session.js';
 import { constantEquals, loginBlocked, recordLoginFailure, clearLoginFailures } from './auth.js';
-import { listUsers, getUser, getRevision, getAttachment } from './db/repo.js';
-import { findTesterByPin, listTesters } from './testers.js';
+import { listUsers, getUser, getRevision, getAttachment, insertAudit, purgeActivity } from './db/repo.js';
+import { findTesterByPin, listTesters, regenerateTesterPin, renameTester } from './testers.js';
 import { summary, events as activityEvents, exportCsv } from './activity-queries.js';
 import { classify, maskInput, recordServerEvent, ingestClientEvents } from './activity.js';
 import { runCommand } from './commands/run.js';
@@ -72,7 +72,11 @@ export function createApp(deps) {
       { 'set-cookie': cookie(sessionToken(user.id, config.secret, 28800, extra), 28800) });
   }
   /* The view is built for the demo user; the cookie adds who really holds the device. */
-  const decorate = (view, session) => ({ ...view, user: { ...view.user, super: !!session.super }, tester: publicTester(session) || { id: null, name: 'Compartido', super: false } });
+  const decorate = (view, session) => ({ ...view, tester: publicTester(session) || { id: null, name: 'Compartido', super: false } });
+  /* ---- Página /super: acceso propio (PIN de super admin + SUPER_KEY) con una cookie aparte de una hora ---- */
+  const SUPER_TTL = 3600;
+  const superCookie = (token, maxAge) => `iae_super=${token}; HttpOnly; SameSite=Strict; Path=/api; Max-Age=${maxAge}${config.secure ? '; Secure' : ''}`;
+  const superSession = (req) => { const v = verifyToken(cookieValue(req.headers.cookie, 'iae_super'), config.secret); return v && v.kind === 'super' ? v : null; };
 
   async function api(req, res, path, act, url) {
     if (path === 'health') return json(res, 200, { ok: true, db: db.kind, revision: await getRevision(db) });
@@ -112,6 +116,69 @@ export function createApp(deps) {
       return json(res, 200, { ok: true }, { 'set-cookie': cookie('', 0) });
     }
 
+    if (path === 'auth/super' && req.method === 'POST') {
+      const input = await readBody(req);
+      const now = deps.now();
+      const keys = ['ip:' + clientIp(req)];
+      if (await loginBlocked(db, keys, now)) return json(res, 429, { error: 'too_many_attempts' });
+      const tester = await findTesterByPin(db, String(input.pin == null ? '' : input.pin));
+      const keyOk = !!config.superKey && constantEquals(String(input.key == null ? '' : input.key), config.superKey);
+      if (!tester || !tester.super || !keyOk) { await recordLoginFailure(db, keys, now); return json(res, 401, { error: 'invalid_credentials' }); }
+      await clearLoginFailures(db, keys);
+      const sid = randomBytes(8).toString('hex');
+      act.session = { testerId: tester.id, testerName: tester.name, super: true, sid };
+      return json(res, 200, { tester: { id: tester.id, name: tester.name } }, { 'set-cookie': superCookie(signToken({ kind: 'super', testerId: tester.id, testerName: tester.name, sid }, config.secret, SUPER_TTL), SUPER_TTL) });
+    }
+    if (path === 'auth/super/logout' && req.method === 'POST') {
+      const sup = superSession(req);
+      if (sup) act.session = { testerId: sup.testerId, testerName: sup.testerName, super: true, sid: sup.sid };
+      return json(res, 200, { ok: true }, { 'set-cookie': superCookie('', 0) });
+    }
+    /* Lecturas del panel y gestión de probadores: solo con la cookie del super admin, nunca con la sesión de la app. */
+    if (path.startsWith('activity/') || path.startsWith('super/')) {
+      const sup = superSession(req);
+      if (!sup) return json(res, 401, { error: 'super_required' });
+      act.session = { testerId: sup.testerId, testerName: sup.testerName, super: true, sid: sup.sid };
+      if (req.method === 'GET') {
+        const f = Object.fromEntries(url.searchParams);
+        if (path === 'activity/me') return json(res, 200, { tester: { id: sup.testerId, name: sup.testerName }, users: await userOptions() });
+        if (path === 'activity/summary') return json(res, 200, await summary(db, f, deps.now()));
+        if (path === 'activity/events') return json(res, 200, await activityEvents(db, f));
+        if (path === 'activity/testers') return json(res, 200, await listTesters(db));
+        if (path === 'activity/export.csv') {
+          const csv = await exportCsv(db, f);
+          res.writeHead(200, { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': 'attachment; filename="actividad.csv"', 'cache-control': 'no-store' });
+          return res.end('\ufeff' + csv);
+        }
+      }
+      if (req.method === 'POST') {
+        const input = await readBody(req);
+        const now = deps.now();
+        const audit = (summary) => insertAudit(db, { at: now, actorUserId: null, actorRole: 'super', actorName: 'Super admin (' + sup.testerName + ')', command: path, channel: 'super', summary });
+        if (path === 'super/regenerate') {
+          const t = await regenerateTesterPin(db, String(input.testerId || ''));
+          if (!t) return json(res, 404, { error: 'tester_not_found' });
+          await audit('Regeneró el PIN de ' + t.name);
+          return json(res, 200, t);
+        }
+        if (path === 'super/rename') {
+          const name = String(input.name || '').trim().slice(0, 60);
+          if (!name) return json(res, 400, { error: 'name_required' });
+          const t = await renameTester(db, String(input.testerId || ''), name);
+          if (!t) return json(res, 404, { error: 'tester_not_found' });
+          await audit('Renombró al probador ' + t.id + ' como ' + name);
+          return json(res, 200, t);
+        }
+        if (path === 'super/purge') {
+          const days = Math.min(3650, Math.max(0, Math.round(Number(input.beforeDays)) || 30));
+          const deleted = await purgeActivity(db, new Date(now.getTime() - days * 86400000));
+          await audit('Borró ' + deleted + ' eventos de actividad anteriores a ' + days + ' días');
+          return json(res, 200, { deleted });
+        }
+      }
+      return json(res, 404, { error: 'not_found' });
+    }
+
     const auth = await sessionUser(req);
     if (!auth) return json(res, 401, { error: 'authentication_required' });
     const { user, session } = auth;
@@ -131,20 +198,6 @@ export function createApp(deps) {
       if (!next || !next.active) return json(res, 404, { error: 'user_not_found' });
       act.user = next;
       return startSession(res, next, session, act, session.sid);
-    }
-    /* Panel de actividad: solo el super admin. Lecturas puras, sin transacción. */
-    if (path.startsWith('activity/') && req.method === 'GET') {
-      if (!session.super) return json(res, 403, { error: 'forbidden_super' });
-      const f = Object.fromEntries(url.searchParams);
-      if (path === 'activity/summary') return json(res, 200, await summary(db, f, deps.now()));
-      if (path === 'activity/events') return json(res, 200, await activityEvents(db, f));
-      if (path === 'activity/testers') return json(res, 200, await listTesters(db));
-      if (path === 'activity/export.csv') {
-        const csv = await exportCsv(db, f);
-        res.writeHead(200, { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': 'attachment; filename="actividad.csv"', 'cache-control': 'no-store' });
-        return res.end('\ufeff' + csv);
-      }
-      return json(res, 404, { error: 'not_found' });
     }
     if (path === 'me/view' && req.method === 'GET') {
       const revision = await getRevision(db);
@@ -173,7 +226,7 @@ export function createApp(deps) {
       const name = path.slice('commands/'.length);
       const input = await readBody(req);
       act.input = input;
-      const { result, revision } = await runCommand(deps, { userId: user.id, name, input, channel: 'web', super: !!session.super });
+      const { result, revision } = await runCommand(deps, { userId: user.id, name, input, channel: 'web' });
       act.revision = revision;
       publish(revision);
       const view = await db.tx((q) => buildView(q, user.id, env()));
@@ -192,6 +245,7 @@ export function createApp(deps) {
   async function serveStatic(res, pathname) {
     let file = null;
     if (pathname === '/' || pathname === '/index.html') file = join(ROOT, 'public', 'index.html');
+    else if (pathname === '/super' || pathname === '/super.html') file = join(ROOT, 'public', 'super.html');
     else {
       const m = /^\/client\/([A-Za-z0-9_][A-Za-z0-9_.-]*)$/.exec(pathname);
       if (m) file = join(ROOT, 'public', 'client', m[1]);
@@ -214,7 +268,7 @@ export function createApp(deps) {
     const ok = status < 400;
     const kind = c.kind === 'login' && !ok ? 'login_failed' : c.kind;
     /* Anonymous polls (a 401 before logging in) are noise, not activity. Failed logins do count. */
-    if (!act.user && !['login', 'login_failed', 'pin'].includes(kind)) return;
+    if (!act.user && !['login', 'login_failed', 'pin', 'super_login', 'super_logout', 'super_action'].includes(kind)) return;
     const s = act.session || {};
     await recordServerEvent(db, {
       at: startedAt, testerId: s.testerId || null, userId: act.user ? act.user.id : null, role: act.user ? act.user.role : null, sid: s.sid || null,

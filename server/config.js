@@ -11,6 +11,8 @@ export function loadConfig(env = process.env) {
     pin,
     /* The shared pilot PIN stays on unless PILOT_PIN_SHARED=false; testers always have their own. */
     sharedPin: env.PILOT_PIN_SHARED !== 'false',
+    /* Second key for the separate super admin page (/super). Empty = that page cannot be opened. */
+    superKey: env.SUPER_KEY || '',
     databaseUrl,
     dataDir: env.PGLITE_DIR || 'data/pglite',
     port: Number(env.PORT || 3000),
