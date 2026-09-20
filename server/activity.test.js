@@ -43,7 +43,7 @@ test('every API request leaves a server event with who, what, duration and outco
   ev = (await rows(t)).slice(2);
   const byName = Object.fromEntries(ev.map((e) => [e.name, e]));
   assert.equal(byName.view.kind, 'view'); assert.equal(byName.view.status, 200); assert.equal(byName.view.revision, v.json.revision); assert.equal(byName.view.sid, (await rows(t))[1].sid);
-  assert.equal(byName.view_304.status, 304); assert.equal(byName.view_304.ok, true);
+  assert.equal(byName.view_304, undefined, '304 polls are not recorded');
   assert.equal(byName.att_p1.kind, 'attachment'); assert.equal(byName.att_p1.status, 200);
   assert.equal(byName.approve_request.kind, 'command'); assert.equal(byName.approve_request.ok, false); assert.equal(byName.approve_request.error, 'forbidden_role'); assert.equal(byName.approve_request.status, 403);
   assert.deepEqual(byName.approve_request.data, { requestId: 'x', pin: '***', cedula: '***', note: 'z'.repeat(200) + '…' });

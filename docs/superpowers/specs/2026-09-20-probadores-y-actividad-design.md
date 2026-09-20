@@ -45,7 +45,7 @@ depurar "zonas calientes" después.
   `kind` ∈ `login | login_failed | logout | switch_user | view | command | attachment | telemetry | activity | error`,
   `name` = comando o ruta, `duration_ms`, `status`, `ok` (2xx/3xx), `error` (código de dominio o HTTP),
   `revision`, `data` = entrada del comando enmascarada (`cedula`, `phone`, `pin`, `pinToken` → `***`;
-  `dataBase64`/`bytes` → longitud; strings > 200 chars truncadas). La vista 304 se registra como `view_304`.
+  `dataBase64`/`bytes` → longitud; strings > 200 chars truncadas). Las respuestas 304 del sondeo no se registran (un INSERT cada 3 s por dispositivo sin información nueva).
   La escritura va en `try/catch` propio: si falla, se pierde el evento, nunca la petición. Las peticiones
   de `telemetry` y `activity/*` no se registran (evitan ruido).
 - **Cliente**: `public/client/telemetry.js` (se carga antes de `state.js`). Registra:

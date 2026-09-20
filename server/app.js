@@ -208,7 +208,8 @@ export function createApp(deps) {
   /* Cada petición /api/* deja un evento con quién, qué, cuánto tardó y cómo terminó. */
   async function recordRequest(req, path, act, startedAt, startedMs, res) {
     const c = classify(path, req.method);
-    if (!c) return;
+    /* A 304 poll every 3 s per device says nothing new: skipping it keeps the log (and Neon writes) small. */
+    if (!c || act.name === 'view_304') return;
     const status = res.statusCode || 0;
     const ok = status < 400;
     const kind = c.kind === 'login' && !ok ? 'login_failed' : c.kind;
