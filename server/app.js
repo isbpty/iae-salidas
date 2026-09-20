@@ -6,7 +6,8 @@ import { randomBytes } from 'node:crypto';
 import { cookieValue, sessionToken, verifySession, pinToken, verifyPinToken } from './session.js';
 import { constantEquals, loginBlocked, recordLoginFailure, clearLoginFailures } from './auth.js';
 import { listUsers, getUser, getRevision, getAttachment } from './db/repo.js';
-import { findTesterByPin } from './testers.js';
+import { findTesterByPin, listTesters } from './testers.js';
+import { summary, events as activityEvents, exportCsv } from './activity-queries.js';
 import { classify, maskInput, recordServerEvent, ingestClientEvents } from './activity.js';
 import { runCommand } from './commands/run.js';
 import { buildView } from './projections/index.js';
@@ -73,7 +74,7 @@ export function createApp(deps) {
   /* The view is built for the demo user; the cookie adds who really holds the device. */
   const decorate = (view, session) => ({ ...view, user: { ...view.user, super: !!session.super }, tester: publicTester(session) || { id: null, name: 'Compartido', super: false } });
 
-  async function api(req, res, path, act) {
+  async function api(req, res, path, act, url) {
     if (path === 'health') return json(res, 200, { ok: true, db: db.kind, revision: await getRevision(db) });
     if (path === 'auth/options' && req.method === 'GET') return json(res, 200, await userOptions());
     /* Step one: the PIN alone says who the tester is. Step two picks the demo user with the proof. */
@@ -130,6 +131,20 @@ export function createApp(deps) {
       if (!next || !next.active) return json(res, 404, { error: 'user_not_found' });
       act.user = next;
       return startSession(res, next, session, act, session.sid);
+    }
+    /* Panel de actividad: solo el super admin. Lecturas puras, sin transacción. */
+    if (path.startsWith('activity/') && req.method === 'GET') {
+      if (!session.super) return json(res, 403, { error: 'forbidden_super' });
+      const f = Object.fromEntries(url.searchParams);
+      if (path === 'activity/summary') return json(res, 200, await summary(db, f, deps.now()));
+      if (path === 'activity/events') return json(res, 200, await activityEvents(db, f));
+      if (path === 'activity/testers') return json(res, 200, await listTesters(db));
+      if (path === 'activity/export.csv') {
+        const csv = await exportCsv(db, f);
+        res.writeHead(200, { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': 'attachment; filename="actividad.csv"', 'cache-control': 'no-store' });
+        return res.end('\ufeff' + csv);
+      }
+      return json(res, 404, { error: 'not_found' });
     }
     if (path === 'me/view' && req.method === 'GET') {
       const revision = await getRevision(db);
@@ -212,7 +227,7 @@ export function createApp(deps) {
     const startedAt = deps.now(), startedMs = performance.now();
     const act = { startedAt };
     try {
-      if (isApi) return await api(req, res, path, act);
+      if (isApi) return await api(req, res, path, act, url);
       if (config.serverless) return json(res, 404, { error: 'not_found' });
       return await serveStatic(res, url.pathname);
     } catch (e) {
