@@ -40,6 +40,6 @@ test('createTesters makes 10 testers once, PINs resolve, and resets keep them', 
   assert.equal((await db.query('SELECT count(*)::int AS c FROM activity_events'))[0].c, 1);
   await db.tx((q) => resetAll(q));
   assert.equal((await listTesters(db)).length, 10, 'testers survive reset');
-  assert.equal((await db.query('SELECT count(*)::int AS c FROM activity_events'))[0].c, 0, 'activity is cleared by reset');
+  assert.equal((await db.query('SELECT count(*)::int AS c FROM activity_events'))[0].c, 1, 'activity history survives a demo reset');
   await db.close();
 });

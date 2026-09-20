@@ -62,6 +62,7 @@ function afterLogin() {
   document.getElementById('resetBtn').style.display = ME.role === 'admin' ? '' : 'none';
   document.getElementById('logoutBtn').style.display = '';
   document.getElementById('switchBtn').style.display = '';
+  document.getElementById('simBtn').style.display = '';
   setBadge(connectedText());
   T.start();
   render();

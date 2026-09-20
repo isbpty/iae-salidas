@@ -104,9 +104,25 @@ export async function summary(q, f = {}, now = new Date()) {
     .map((r) => ({ name: r.name, count: num(r.count) }));
   const p7 = []; const w7 = where(f, p7);
   const [tot] = await q.query(`SELECT count(*)::int AS events FROM activity_events WHERE ${w7}`, p7);
+  /* Uso del simulador por probador: arranques, recorridos completos, salidas a mitad, pausas, paso a paso, velocidad. */
+  const p8 = []; const w8 = where(f, p8);
+  const simRows = await q.query(`SELECT coalesce(tester_id, '') AS tid,
+      sum(CASE WHEN name = 'start' THEN 1 ELSE 0 END)::int AS runs,
+      sum(CASE WHEN name = 'end' AND data->>'completed' = 'true' THEN 1 ELSE 0 END)::int AS completed,
+      sum(CASE WHEN name = 'exit' THEN 1 ELSE 0 END)::int AS exited,
+      sum(CASE WHEN name = 'pause' THEN 1 ELSE 0 END)::int AS pauses,
+      sum(CASE WHEN name = 'step_mode' THEN 1 ELSE 0 END)::int AS step_mode,
+      sum(CASE WHEN name = 'speed' THEN 1 ELSE 0 END)::int AS speed_changes,
+      sum(CASE WHEN name = 'start' AND data->>'reset' = 'true' THEN 1 ELSE 0 END)::int AS resets,
+      max(CASE WHEN name = 'end' THEN (data->>'stepsDone')::int END) AS max_step,
+      coalesce(sum(CASE WHEN name = 'end' THEN duration_ms ELSE 0 END), 0)::bigint AS total_ms,
+      max(at) AS last_at
+    FROM activity_events WHERE ${w8} AND kind = 'simulator' GROUP BY 1 ORDER BY runs DESC`, p8);
+  const simulator = simRows.map((r) => ({ id: r.tid || 'shared', name: testerName(r.tid || null), runs: num(r.runs), completed: num(r.completed), exited: num(r.exited), pauses: num(r.pauses),
+    stepMode: num(r.step_mode), speedChanges: num(r.speed_changes), resets: num(r.resets), maxStep: r.max_step == null ? null : num(r.max_step), totalMs: ms(r.total_ms), lastAt: new Date(r.last_at).toISOString() }));
   return {
     generatedAt: now.toISOString(), sessionGapMin: SESSION_GAP_MIN,
-    testers: testerList, screens, actions, clicks, errors, abandons,
+    testers: testerList, screens, actions, clicks, errors, abandons, simulator,
     sessions: sessions.slice(0, 200).map((s) => ({ testerId: s.tester_id || 'shared', tester: testerName(s.tester_id), sid: s.sid, seg: num(s.seg), started: new Date(s.started).toISOString(), ended: new Date(s.ended).toISOString(), events: num(s.events), activeMs: ms(s.active_ms), users: s.users || [] })),
     totals: { events: num(tot.events), sessions: sessions.length, activeMs: sessions.reduce((a, s) => a + ms(s.active_ms), 0) },
   };

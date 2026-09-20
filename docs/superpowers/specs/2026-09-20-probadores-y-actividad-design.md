@@ -61,8 +61,9 @@ depurar "zonas calientes" después.
     e ignora cualquiera de esos campos que venga del cliente. Sin sesión: 401 y el cliente vacía la cola.
 - **Sesiones derivadas**: una sesión es un `sid`; si entre dos eventos pasan más de 10 min, se parte en
   segmentos. Duración activa = suma de segmentos (último − primero).
-- Retención: comando `purge_activity { beforeDays }` (admin + `super`); `reset_demo` y `seed_load` vacían la
-  tabla. `audit_log` no cambia.
+- Retención: solo el borrado desde `/super` (`POST /api/super/purge { beforeDays }`) elimina actividad. `reset_demo` y
+  `seed_load` **no** la tocan (cambio del 2026-09-20 por la tarde: el simulador reinicia el demo en cada recorrido y no
+  debe borrar las estadísticas de uso). `audit_log` no cambia.
 
 ## 3 · Panel "Actividad" (solo super)
 

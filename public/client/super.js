@@ -2,8 +2,8 @@
    (SUPER_KEY), cookie aparte de una hora. Lee GET /api/activity/* y gestiona probadores por /api/super/*. */
 const SUP = { tester: null, users: [], range: 'today', from: '', to: '', testerId: '', userId: '', role: '', errorsOnly: false, q: '', sid: '', kind: '',
   summary: null, events: [], nextBefore: null, loading: false, seq: 0, error: null, timer: null, newPin: null, showTesters: false, testers: null };
-const ACT_KINDS = ['', 'command', 'view', 'login', 'login_failed', 'switch_user', 'logout', 'attachment', 'super_login', 'super_action', 'screen_enter', 'screen_leave', 'modal_open', 'modal_close', 'click', 'form_submit', 'form_abandon', 'js_error', 'promise_rejection', 'visibility', 'session_start', 'session_end'];
-const KIND_ICON = { command: '⚡', view: '👁', login: '🔑', login_failed: '⛔', switch_user: '🔁', logout: '🚪', attachment: '🖼', screen_enter: '➡️', screen_leave: '⬅️', modal_open: '🗔', modal_close: '🗙', click: '🖱', form_submit: '✅', form_abandon: '🚫', js_error: '💥', promise_rejection: '💥', visibility: '👀', session_start: '▶', session_end: '⏹', pin: '🔢', super_login: '🛡️', super_logout: '🛡️', super_action: '🛠', other: '·' };
+const ACT_KINDS = ['', 'simulator', 'command', 'view', 'login', 'login_failed', 'switch_user', 'logout', 'attachment', 'super_login', 'super_action', 'screen_enter', 'screen_leave', 'modal_open', 'modal_close', 'click', 'form_submit', 'form_abandon', 'js_error', 'promise_rejection', 'visibility', 'session_start', 'session_end'];
+const KIND_ICON = { command: '⚡', view: '👁', login: '🔑', login_failed: '⛔', switch_user: '🔁', logout: '🚪', attachment: '🖼', screen_enter: '➡️', screen_leave: '⬅️', modal_open: '🗔', modal_close: '🗙', click: '🖱', form_submit: '✅', form_abandon: '🚫', js_error: '💥', promise_rejection: '💥', visibility: '👀', session_start: '▶', session_end: '⏹', pin: '🔢', super_login: '🛡️', super_logout: '🛡️', super_action: '🛠', simulator: '🎬', other: '·' };
 
 /* ---------- red ---------- */
 async function req(path, opts = {}) {
@@ -100,7 +100,17 @@ function panel() {
   if (!s) return h + (SUP.loading ? '<div class="empty">Cargando…</div>' : '');
   const errs = s.errors.reduce((a, e) => a + e.count, 0);
   h += '<div class="kpis">' + kpi('eventos', s.totals.events) + kpi('sesiones', s.totals.sessions) + kpi('tiempo activo total', fmtDur(s.totals.activeMs)) + kpi('errores', errs, errs ? 'warn' : 'ok') + '</div>';
-  return h + testerCards(s) + hotspots(s) + sessions(s) + timeline();
+  return h + testerCards(s) + simulatorBlock(s) + hotspots(s) + sessions(s) + timeline();
+}
+function simulatorBlock(s) {
+  const list = s.simulator || [];
+  const tot = list.reduce((a, x) => ({ runs: a.runs + x.runs, completed: a.completed + x.completed, exited: a.exited + x.exited, pauses: a.pauses + x.pauses, stepMode: a.stepMode + x.stepMode }), { runs: 0, completed: 0, exited: 0, pauses: 0, stepMode: 0 });
+  let h = '<div class="section-title">Simulador (recorrido guiado del demo)</div>';
+  if (!list.length) return h + '<div class="empty">Nadie ha usado el simulador en este rango.</div>';
+  h += '<div class="kpis">' + kpi('arranques', tot.runs) + kpi('recorridos completos', tot.completed, 'ok') + kpi('salieron a mitad', tot.exited, tot.exited ? 'warn' : '') + kpi('pausas / paso a paso', tot.pauses + ' / ' + tot.stepMode) + '</div>';
+  return h + '<table class="tbl"><tr><th>Probador</th><th>Arranques</th><th>Completos</th><th>Salió a mitad</th><th>Paso máx.</th><th>Pausas</th><th>Paso a paso</th><th>Velocidad</th><th>Con reinicio</th><th>Tiempo total</th><th>Último uso</th></tr>' +
+    list.map((x) => '<tr><td>' + esc(x.name) + '</td><td>' + x.runs + '</td><td class="' + (x.completed ? 'ok-text' : '') + '">' + x.completed + '</td><td class="' + (x.exited ? 'danger-text' : '') + '">' + x.exited + '</td><td>' + (x.maxStep == null ? '—' : x.maxStep) + '</td><td>' + x.pauses + '</td><td>' + x.stepMode + '</td><td>' + x.speedChanges + ' cambios</td><td>' + x.resets + '</td><td>' + fmtDur(x.totalMs) + '</td><td class="small">' + fmtAgo(x.lastAt) + '</td></tr>').join('') + '</table>' +
+    '<p class="small muted">Automático = sin pausas ni paso a paso. En la línea de tiempo, filtra por tipo <span class="mono">simulator</span> para ver cada acción.</p>';
 }
 function testerCards(s) {
   const today = new Date(); today.setHours(0, 0, 0, 0);

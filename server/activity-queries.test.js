@@ -24,6 +24,15 @@ async function seed(t) {
     /* another tester on the shared PIN, another session */
     ev({ min: 2, t: null, u: 'u_s2', r: 'recepcion', sid: 'sB', name: 'approve_request', ms: 600 }),
     ev({ min: 3, t: null, u: 'u_s2', r: 'recepcion', sid: 'sB', name: 'approve_request', ms: 1400 }),
+    /* simulator usage: one full run with a pause, one run exited at step 4 */
+    ev({ min: 7, source: 'client', kind: 'simulator', name: 'start', ms: null, status: null, data: { reset: true, user: 'u_p1' } }),
+    ev({ min: 8, source: 'client', kind: 'simulator', name: 'pause', ms: null, status: null }),
+    ev({ min: 9, source: 'client', kind: 'simulator', name: 'speed', ms: null, status: null, data: { speed: 2 } }),
+    ev({ min: 12, source: 'client', kind: 'simulator', name: 'end', ms: 300000, status: null, data: { completed: true, stepsDone: 12, totalSteps: 12 } }),
+    ev({ min: 22, source: 'client', kind: 'simulator', name: 'start', ms: null, status: null, data: { reset: false, user: 'u_p1' } }),
+    ev({ min: 22, source: 'client', kind: 'simulator', name: 'step_mode', ms: null, status: null }),
+    ev({ min: 23, source: 'client', kind: 'simulator', name: 'exit', ms: null, status: null }),
+    ev({ min: 23, source: 'client', kind: 'simulator', name: 'end', ms: 60000, status: null, data: { completed: false, stepsDone: 3, totalSteps: 12 } }),
   ]);
 }
 
@@ -31,11 +40,12 @@ test('summary derives sessions with a 10 minute gap and aggregates hot spots', a
   const t = await makeTestApp();
   await seed(t);
   const s = await summary(t.db, {}, new Date(T0 + 25 * M));
-  assert.equal(s.totals.events, 12);
-  assert.equal(s.totals.sessions, 3, 'sA splits in two, sB is one');
-  assert.equal(s.totals.activeMs, 6 * M + 3 * M + 1 * M);
+  assert.equal(s.totals.events, 20);
+  assert.equal(s.totals.sessions, 2, 'the simulator events bridge the 15 minute gap: sA is one session, sB another');
+  assert.deepEqual(s.simulator.map((x) => [x.id, x.runs, x.completed, x.exited, x.pauses, x.stepMode, x.speedChanges, x.resets, x.maxStep, x.totalMs]), [['t2', 2, 1, 1, 1, 1, 1, 1, 12, 360000]]);
+  assert.equal(s.totals.activeMs, 24 * M + 1 * M);
   const t2 = s.testers.find((x) => x.id === 't2');
-  assert.equal(t2.sessions, 2); assert.equal(t2.activeMs, 9 * M); assert.equal(t2.actions, 2); assert.equal(t2.errors, 2); assert.equal(t2.online, true);
+  assert.equal(t2.sessions, 1); assert.equal(t2.activeMs, 24 * M); assert.equal(t2.actions, 2); assert.equal(t2.errors, 2); assert.equal(t2.online, true);
   assert.equal(t2.lastAt, new Date(T0 + 24 * M).toISOString());
   const shared = s.testers.find((x) => x.id === 'shared');
   assert.equal(shared.name, 'Compartido'); assert.equal(shared.sessions, 1); assert.equal(shared.online, false);
@@ -49,19 +59,19 @@ test('summary derives sessions with a 10 minute gap and aggregates hot spots', a
   assert.equal(s.errors.length, 2);
   assert.deepEqual(s.errors.map((e) => e.error).sort(), ['TypeError: boom', 'forbidden_person']);
   assert.deepEqual(s.errors[0].testers, ['Probador 2']);
-  assert.equal(s.sessions[0].sid, 'sA'); assert.deepEqual(s.sessions[0].users, ['u_p1']);
+  assert.equal(s.sessions[0].sid, 'sB', 'most recent start first'); assert.deepEqual(s.sessions.find((x) => x.sid === 'sA').users, ['u_p1']);
 
   /* filters */
   const only = await summary(t.db, { testerId: 'shared' }, new Date(T0 + 25 * M));
-  assert.equal(only.totals.events, 2); assert.equal(only.testers.find((x) => x.id === 'shared').sessions, 1);
+  assert.equal(only.totals.events, 2); assert.deepEqual(only.simulator, []); assert.equal(only.testers.find((x) => x.id === 'shared').sessions, 1);
   const win = await summary(t.db, { from: new Date(T0 + 20 * M).toISOString() }, new Date(T0 + 25 * M));
-  assert.equal(win.totals.events, 3);
+  assert.equal(win.totals.events, 7);
   const errs = await summary(t.db, { errorsOnly: '1' }, new Date(T0 + 25 * M));
   assert.equal(errs.totals.events, 2);
 
-  const page = await events(t.db, { limit: 5 });
-  assert.equal(page.events.length, 5); assert.ok(page.nextBefore); assert.ok(page.events[0].id > page.events[4].id);
-  const page2 = await events(t.db, { limit: 5, before: page.nextBefore });
+  const page = await events(t.db, { limit: 3, kind: 'command' });
+  assert.equal(page.events.length, 3); assert.ok(page.nextBefore); assert.ok(page.events[0].id > page.events[2].id);
+  const page2 = await events(t.db, { limit: 3, before: page.nextBefore });
   assert.ok(page2.events.every((e) => e.id < page.nextBefore));
   const found = await events(t.db, { q: 'boom' });
   assert.equal(found.events.length, 1); assert.equal(found.events[0].kind, 'js_error');
