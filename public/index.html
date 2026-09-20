@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>IAE Salidas</title>
+  <link rel="stylesheet" href="client/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">🏫 <b>IAE Salidas</b> <span id="connectedStatus" class="muted small">conectando…</span></div>
+    <nav class="tabs" id="tabs"></nav>
+    <div class="topbar-right">
+      <label class="switch" id="splitWrap" style="display:none"><input type="checkbox" id="splitToggle"> Vista dividida</label>
+      <span id="clock" class="muted mono"></span>
+      <button class="btn ghost" data-action="showGuide">📖 Guion</button>
+      <button class="btn ghost" id="simBtn" style="display:none">▶ Simulador</button>
+      <button class="btn ghost danger" data-action="resetDemo" id="resetBtn" style="display:none">↺ Reiniciar</button>
+      <button class="btn ghost" data-action="switchUser" id="switchBtn" style="display:none">🔁 Cambiar usuario</button>
+      <button class="btn ghost" data-action="logout" id="logoutBtn" style="display:none">Salir</button>
+    </div>
+  </header>
+  <main id="main"></main>
+  <div id="toasts"></div>
+  <div id="modal" class="modal hidden"></div>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script src="client/format.js"></script>
+  <script src="client/api.js"></script>
+  <script src="client/telemetry.js"></script>
+  <script src="client/state.js"></script>
+  <script src="client/model.js"></script>
+  <script src="client/qr.js"></script>
+  <script src="client/simulator.js"></script>
+  <script src="client/views.js"></script>
+</body>
+</html>

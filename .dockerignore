@@ -1,4 +1,7 @@
-.git
 node_modules
-data/*.json
-*.patch
+data
+docs
+brag-output*
+.claude
+.git
+*.mp4

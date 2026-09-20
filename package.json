@@ -1,20 +1,19 @@
 {
-  "name": "iae-salidas-connected-pilot",
-  "version": "0.1.0",
+  "name": "iae-salidas",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "start": "node server/index.js",
-    "test": "node --test",
-    "check": "node --check server/index.js && node --check connected-bridge.js && npm test"
+    "dev": "node --env-file=.env server/index.js",
+    "test": "node --test \"server/**/*.test.js\"",
+    "reset": "node -e \"import('node:fs').then(fs=>fs.rmSync('data/pglite',{recursive:true,force:true}))\"",
+    "seed:load": "node --env-file=.env server/db/seed-load-cli.js",
+    "load:test": "node --env-file=.env server/tools/load-test.js"
   },
-  "engines": {
-    "node": ">=20"
-  },
-  "optionalDependencies": {
-    "whatsapp-web.js": "^1.34.6"
-  },
+  "engines": { "node": ">=20" },
   "dependencies": {
-    "pg": "^8.16.3"
+    "@electric-sql/pglite": "^0.3.16",
+    "pg": "^8.23.0"
   }
 }
