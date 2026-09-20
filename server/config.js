@@ -9,6 +9,8 @@ export function loadConfig(env = process.env) {
   return {
     secret,
     pin,
+    /* The shared pilot PIN stays on unless PILOT_PIN_SHARED=false; testers always have their own. */
+    sharedPin: env.PILOT_PIN_SHARED !== 'false',
     databaseUrl,
     dataDir: env.PGLITE_DIR || 'data/pglite',
     port: Number(env.PORT || 3000),

@@ -10,11 +10,11 @@ const sanitize = (input) => {
   return out;
 };
 
-export async function runCommand(deps, { userId, name, input = {}, channel = 'web' }) {
+export async function runCommand(deps, { userId, name, input = {}, channel = 'web', super: isSuper = false }) {
   const cmd = COMMANDS[name];
   if (!cmd) throw new HttpError(404, 'unknown_command');
   return deps.db.tx(async (q) => {
-    const ctx = await makeCtx(q, deps, userId, { command: name, channel });
+    const ctx = await makeCtx(q, deps, userId, { command: name, channel, super: isSuper });
     if (!cmd.roles.includes(ctx.user.role)) throw new HttpError(403, 'forbidden_role');
     const result = await cmd.handler(ctx, input || {});
     await insertAudit(q, { at: ctx.now, actorUserId: ctx.user.id, actorRole: ctx.user.role, actorName: ctx.user.name, command: name, channel, input: sanitize(input) });

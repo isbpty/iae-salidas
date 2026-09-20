@@ -5,11 +5,14 @@ import { resetAll, seedDemo } from '../db/seed.js';
 import { seedLoad } from '../db/seed-load.js';
 import { logEvent } from '../domain/notifications.js';
 import { roleName } from '../domain/text.js';
-import { badRequest } from '../domain/errors.js';
+import { badRequest, deny, notFound } from '../domain/errors.js';
+import { createTesters, regenerateTesterPin, renameTester, countTesters } from '../testers.js';
+import { purgeActivity } from '../db/repo.js';
 
 const CAPS = ['ver_solicitudes', 'aprobar', 'ver_excusas', 'decidir_excusas', 'marcar_salida', 'ver_estudiantes', 'gestionar_autorizados', 'ver_rutas', 'marcar_bus', 'personal', 'config', 'bitacora', 'todos_niveles'];
 const ROLES = ['recepcion', 'profesor', 'garita', 'monitora'];
 const HHMM = /^\d{2}:\d{2}$/;
+const requireSuper = (ctx) => { if (!ctx.super) deny('forbidden_super'); };
 const clampInt = (v, min, max, dflt) => { const n = Math.round(Number(v)); return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : dflt; };
 
 register({
@@ -75,6 +78,48 @@ register({
       const counts = await seedLoad(ctx.q, { students, seed, now: ctx.now, tz: ctx.tz });
       await logEvent(ctx, 'Cargó datos de prueba: ' + counts.students + ' estudiantes en ' + counts.families + ' familias', ctx.staff.name);
       return counts;
+    },
+  },
+  /* Testers: real people with their own PIN. The first creation may run from the shared PIN (no super
+     admin exists yet); after that every tester operation needs the super admin's session. */
+  create_testers: {
+    roles: ['admin'],
+    handler: async (ctx) => {
+      if ((await countTesters(ctx.q)) > 0) requireSuper(ctx);
+      const made = await createTesters(ctx.q, ctx.now);
+      if (made.length) await logEvent(ctx, 'Creó los ' + made.length + ' probadores del piloto', ctx.staff.name);
+      return made;
+    },
+  },
+  regenerate_tester_pin: {
+    roles: ['admin'],
+    handler: async (ctx, input) => {
+      requireSuper(ctx);
+      const t = await regenerateTesterPin(ctx.q, String(input.testerId || ''));
+      if (!t) notFound('tester_not_found');
+      await logEvent(ctx, 'Regeneró el PIN de ' + t.name, ctx.staff.name);
+      return t;
+    },
+  },
+  rename_tester: {
+    roles: ['admin'],
+    handler: async (ctx, input) => {
+      requireSuper(ctx);
+      const name = String(input.name || '').trim().slice(0, 60);
+      if (!name) badRequest('name_required');
+      const t = await renameTester(ctx.q, String(input.testerId || ''), name);
+      if (!t) notFound('tester_not_found');
+      return t;
+    },
+  },
+  purge_activity: {
+    roles: ['admin'],
+    handler: async (ctx, input) => {
+      requireSuper(ctx);
+      const days = clampInt(input.beforeDays, 0, 3650, 30);
+      const deleted = await purgeActivity(ctx.q, new Date(ctx.now.getTime() - days * 86400000));
+      await logEvent(ctx, 'Borró ' + deleted + ' eventos de actividad anteriores a ' + days + ' días', ctx.staff.name);
+      return { deleted };
     },
   },
   mark_notifications_read: {

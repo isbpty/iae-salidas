@@ -11,11 +11,11 @@ import { buildView } from './projections/index.js';
 export const TZ = 'America/Panama';
 /* A 1x1 transparent PNG: the smallest upload the mime allowlist accepts. */
 export const PNG_1x1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
-export const CONFIG = { secret: 's'.repeat(32), pin: '4321', databaseUrl: null, dataDir: null, port: 0, serverless: false, secure: false };
+export const CONFIG = { secret: 's'.repeat(32), pin: '4321', sharedPin: true, databaseUrl: null, dataDir: null, port: 0, serverless: false, secure: false };
 /* Friday 2026-09-18 10:30 in Panama: school hours, bus not on the road unless simulateBus. */
 export const NOW = new Date('2026-09-18T15:30:00Z');
 
-export async function makeTestApp({ now = NOW } = {}) {
+export async function makeTestApp({ now = NOW, config = {} } = {}) {
   const db = await openDb({});
   await migrate(db);
   await db.tx((q) => seedDemo(q, { now, tz: TZ }));
@@ -23,11 +23,11 @@ export async function makeTestApp({ now = NOW } = {}) {
      Tests may set `clock.now` directly to jump in time. */
   const clock = { now };
   const tick = () => { clock.now = new Date(clock.now.getTime() + 1000); return clock.now; };
-  const deps = { db, config: CONFIG, transport: new SimulatorTransport(), gps: new SimulatedGps(), now: tick };
+  const deps = { db, config: { ...CONFIG, ...config }, transport: new SimulatorTransport(), gps: new SimulatedGps(), now: tick };
   const app = createApp(deps);
   return {
     db, deps, app, clock,
-    run: (name, userId, input = {}) => runCommand(deps, { userId, name, input }),
+    run: (name, userId, input = {}, opts = {}) => runCommand(deps, { userId, name, input, ...opts }),
     view: (userId) => db.tx((q) => buildView(q, userId, { now: clock.now, transport: deps.transport, gps: deps.gps, serverless: false })),
     listen: async () => {
       const server = http.createServer(app.handler);
