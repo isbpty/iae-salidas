@@ -2,17 +2,18 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from './client.js';
 import { migrate } from './migrate.js';
+import { MIGRATIONS } from './schema.js';
 
 test('migrate creates the schema once and is idempotent', async () => {
   const db = await openDb({});
   await migrate(db);
   await migrate(db);
   const tables = (await db.query("SELECT table_name FROM information_schema.tables WHERE table_schema='public' ORDER BY 1")).map((r) => r.table_name);
-  for (const t of ['settings', 'app_meta', 'levels', 'staff', 'role_permissions', 'persons', 'students', 'guardianships', 'users', 'attachments', 'authorizations', 'requests', 'request_events', 'pickup_confirmations', 'notifications', 'chat_messages', 'conversation_state', 'routes', 'stops', 'trips', 'trip_boardings', 'bus_opt_outs', 'audit_log', 'login_attempts', 'schema_migrations']) {
+  for (const t of ['settings', 'app_meta', 'levels', 'staff', 'role_permissions', 'persons', 'students', 'guardianships', 'users', 'attachments', 'authorizations', 'requests', 'request_events', 'pickup_confirmations', 'notifications', 'chat_messages', 'conversation_state', 'routes', 'stops', 'trips', 'trip_boardings', 'bus_opt_outs', 'audit_log', 'login_attempts', 'testers', 'activity_events', 'schema_migrations']) {
     assert.ok(tables.includes(t), `missing table ${t}`);
   }
   const applied = await db.query('SELECT version FROM schema_migrations');
-  assert.equal(applied.length, 2);
+  assert.equal(applied.length, MIGRATIONS.length);
   await db.close();
 });
 
