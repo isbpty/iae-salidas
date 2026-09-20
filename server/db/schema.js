@@ -74,4 +74,16 @@ CREATE TABLE IF NOT EXISTS login_attempts (key text PRIMARY KEY, count integer N
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS seq bigserial;
 `,
   },
+  {
+    version: '003_testers_activity',
+    sql: `
+CREATE TABLE IF NOT EXISTS testers (id text PRIMARY KEY, name text NOT NULL, pin_hash text NOT NULL, super boolean NOT NULL DEFAULT false, active boolean NOT NULL DEFAULT true, created_at timestamptz NOT NULL);
+CREATE TABLE IF NOT EXISTS activity_events (
+  id bigserial PRIMARY KEY, at timestamptz NOT NULL, tester_id text, user_id text, role text, sid text, source text NOT NULL, kind text NOT NULL,
+  name text, screen text, target text, duration_ms integer, ok boolean, error text, status integer, revision integer, ip text, ua text, data jsonb);
+CREATE INDEX IF NOT EXISTS activity_tester_at ON activity_events(tester_id, at);
+CREATE INDEX IF NOT EXISTS activity_sid_at ON activity_events(sid, at);
+CREATE INDEX IF NOT EXISTS activity_kind_name_at ON activity_events(kind, name, at);
+`,
+  },
 ];

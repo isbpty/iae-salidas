@@ -1,7 +1,8 @@
 import { shiftISO } from '../domain/time.js';
 import { insertRow, saveSettings, setPermission, getRevision } from './repo.js';
 
-const MOVEMENT_TABLES = ['login_attempts', 'audit_log', 'bus_opt_outs', 'trip_boardings', 'trips', 'conversation_state', 'chat_messages', 'notifications', 'pickup_confirmations', 'request_events', 'requests', 'authorizations', 'guardianships', 'users', 'students', 'persons', 'attachments', 'stops', 'routes', 'role_permissions', 'staff', 'levels', 'app_meta', 'settings'];
+/* `testers` is deliberately absent: tester PINs survive every reset. */
+const MOVEMENT_TABLES = ['activity_events', 'login_attempts', 'audit_log', 'bus_opt_outs', 'trip_boardings', 'trips', 'conversation_state', 'chat_messages', 'notifications', 'pickup_confirmations', 'request_events', 'requests', 'authorizations', 'guardianships', 'users', 'students', 'persons', 'attachments', 'stops', 'routes', 'role_permissions', 'staff', 'levels', 'app_meta', 'settings'];
 
 export async function resetAll(q) { await q.exec(`TRUNCATE ${MOVEMENT_TABLES.join(', ')} RESTART IDENTITY CASCADE`); }
 export async function isEmpty(q) { return (await q.query('SELECT count(*)::int AS c FROM users'))[0].c === 0; }

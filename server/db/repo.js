@@ -198,3 +198,7 @@ export async function insertOptOut(q, tripId, studentId, personId, at) {
 /* ---------- attachments ---------- */
 export const insertAttachment = (q, a) => insertRow(q, 'attachments', a);
 export const getAttachment = async (q, id) => one(await q.query('SELECT * FROM attachments WHERE id=$1', [id]));
+
+/* ---------- activity (registro técnico, append-only) ---------- */
+export const insertActivity = (q, row) => insertRow(q, 'activity_events', row);
+export const purgeActivity = async (q, before) => (await q.query('DELETE FROM activity_events WHERE at < $1 RETURNING id', [before.toISOString()])).length;
