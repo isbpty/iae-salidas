@@ -249,7 +249,10 @@ function simCursorClick() { const cur = simEl().querySelector('.sim-cursor'); cu
 
 /* ---------- arranque y parada ---------- */
 async function simStart() {
-  if (SIM.active || !V) return;
+  if (SIM.active || !V || UI.busy) return;
+  /* Reservar la instancia antes del diálogo y del reinicio: un segundo clic en esos segundos arrancaba otro recorrido en paralelo. */
+  SIM.active = true; SIM.runId = (SIM.runId || 0) + 1;
+  const btn = document.getElementById('simBtn'); if (btn) btn.disabled = true;
   const reset = confirm('El simulador recorre el guion del demo manejando la app de verdad.\n¿Reiniciar antes los datos de ejemplo para que el recorrido salga igual que siempre?');
   const startUser = ME.id;
   if (reset) {
@@ -260,7 +263,7 @@ async function simStart() {
       await apply('reset_demo', {});
     } catch { /* apply ya avisó */ }
   }
-  SIM.active = true; SIM.playing = true; SIM.stepMode = false; SIM.abort = false; SIM.stepNo = 0; SIM.startUser = startUser; SIM.text = ''; SIM.startedAt = Date.now(); SIM.completed = false;
+  SIM.playing = true; SIM.stepMode = false; SIM.abort = false; SIM.stepNo = 0; SIM.startUser = startUser; SIM.text = ''; SIM.startedAt = Date.now(); SIM.completed = false;
   SIM.confirmBackup = window.confirm; window.confirm = () => true;
   const el = simEl(); el.classList.remove('hidden');
   T.push({ kind: 'simulator', name: 'start', data: { reset, user: ME.id, speed: SIM.speed } });
@@ -280,6 +283,7 @@ function simStop() { if (!SIM.active) return; SIM.abort = true; SIM.playing = tr
 async function simFinish() {
   window.confirm = SIM.confirmBackup || window.confirm;
   SIM.active = false; SIM.playing = false; SIM.waiters = [];
+  const btn = document.getElementById('simBtn'); if (btn) btn.disabled = false;
   const el = simEl(); el.classList.add('hidden'); el.querySelector('.sim-spot').style.opacity = '0'; el.querySelector('.sim-cursor').style.opacity = '0';
   T.push({ kind: 'simulator', name: 'end', target: String(SIM.stepNo), durationMs: Date.now() - SIM.startedAt, data: { completed: SIM.completed, stepsDone: SIM.completed ? SIM_SCRIPT.length : Math.max(0, SIM.stepNo - 1), totalSteps: SIM_SCRIPT.length } });
   T.flush();
