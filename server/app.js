@@ -7,6 +7,7 @@ import { cookieValue, sessionToken, verifySession, pinToken, verifyPinToken } fr
 import { constantEquals, loginBlocked, recordLoginFailure, clearLoginFailures } from './auth.js';
 import { listUsers, getUser, getRevision, getAttachment } from './db/repo.js';
 import { findTesterByPin } from './testers.js';
+import { classify, maskInput, recordServerEvent, ingestClientEvents } from './activity.js';
 import { runCommand } from './commands/run.js';
 import { buildView } from './projections/index.js';
 import { canSeeAttachment } from './projections/access.js';
@@ -23,6 +24,7 @@ export function createApp(deps) {
   };
   const env = () => ({ now: deps.now(), transport: deps.transport, gps: deps.gps, serverless: config.serverless });
   const json = (res, status, value, headers = {}) => {
+    if (status >= 400 && value && value.error) res.errorCode = value.error;
     res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers });
     res.end(JSON.stringify(value));
   };
@@ -62,15 +64,16 @@ export function createApp(deps) {
   }
   const publicTester = (t) => (t && t.testerId ? { id: t.testerId, name: t.testerName, super: !!t.super } : null);
   const userOptions = async () => (await listUsers(db)).map((u) => ({ id: u.id, name: u.name, role: u.role }));
-  function startSession(res, user, proof, sid = randomBytes(8).toString('hex')) {
+  function startSession(res, user, proof, act, sid = randomBytes(8).toString('hex')) {
     const extra = { testerId: proof.testerId || null, testerName: proof.testerName || null, super: !!proof.super, sid };
+    act.session = extra;
     return json(res, 200, { user: { id: user.id, name: user.name, role: user.role }, tester: publicTester(extra), super: extra.super },
       { 'set-cookie': cookie(sessionToken(user.id, config.secret, 28800, extra), 28800) });
   }
   /* The view is built for the demo user; the cookie adds who really holds the device. */
   const decorate = (view, session) => ({ ...view, user: { ...view.user, super: !!session.super }, tester: publicTester(session) || { id: null, name: 'Compartido', super: false } });
 
-  async function api(req, res, path) {
+  async function api(req, res, path, act) {
     if (path === 'health') return json(res, 200, { ok: true, db: db.kind, revision: await getRevision(db) });
     if (path === 'auth/options' && req.method === 'GET') return json(res, 200, await userOptions());
     /* Step one: the PIN alone says who the tester is. Step two picks the demo user with the proof. */
@@ -82,6 +85,7 @@ export function createApp(deps) {
       const tester = await resolvePin(input.pin);
       if (tester === undefined) { await recordLoginFailure(db, keys, now); return json(res, 401, { error: 'invalid_credentials' }); }
       await clearLoginFailures(db, keys);
+      act.session = { testerId: tester ? tester.id : null, super: !!(tester && tester.super) };
       const token = pinToken(tester, config.secret);
       return json(res, 200, { tester: publicTester(verifyPinToken(token, config.secret)), pinToken: token, options: await userOptions() });
     }
@@ -98,25 +102,40 @@ export function createApp(deps) {
       }
       if (!proof) { await recordLoginFailure(db, keys, now); return json(res, 401, { error: 'invalid_credentials' }); }
       await clearLoginFailures(db, keys);
-      return startSession(res, user, proof);
+      act.user = user; act.session = { testerId: proof.testerId || null, super: !!proof.super };
+      return startSession(res, user, proof, act);
     }
-    if (path === 'auth/logout' && req.method === 'POST') return json(res, 200, { ok: true }, { 'set-cookie': cookie('', 0) });
+    if (path === 'auth/logout' && req.method === 'POST') {
+      const a = await sessionUser(req);
+      if (a) { act.user = a.user; act.session = a.session; }
+      return json(res, 200, { ok: true }, { 'set-cookie': cookie('', 0) });
+    }
 
     const auth = await sessionUser(req);
     if (!auth) return json(res, 401, { error: 'authentication_required' });
     const { user, session } = auth;
+    act.user = user; act.session = session;
+
+    /* Eventos del navegador (pantallas, clics, errores JS). El servidor sella quién los manda. */
+    if (path === 'telemetry' && req.method === 'POST') {
+      const input = await readBody(req);
+      const stored = await ingestClientEvents(db, { session, user, ip: clientIp(req), ua: userAgent(req), now: act.startedAt }, input.events);
+      return json(res, 200, { ok: true, stored });
+    }
 
     /* Same tester, same session id, another demo user: no PIN again. */
     if (path === 'auth/switch' && req.method === 'POST') {
       const input = await readBody(req);
       const next = input.userId ? await getUser(db, String(input.userId)) : null;
       if (!next || !next.active) return json(res, 404, { error: 'user_not_found' });
-      return startSession(res, next, session, session.sid);
+      act.user = next;
+      return startSession(res, next, session, act, session.sid);
     }
     if (path === 'me/view' && req.method === 'GET') {
       const revision = await getRevision(db);
       const etag = `"${revision}"`;
-      if (req.headers['if-none-match'] === etag) { res.writeHead(304, { etag, 'cache-control': 'no-store' }); return res.end(); }
+      act.revision = revision;
+      if (req.headers['if-none-match'] === etag) { act.name = 'view_304'; res.writeHead(304, { etag, 'cache-control': 'no-store' }); return res.end(); }
       const view = await db.tx((q) => buildView(q, user.id, env()));
       return json(res, 200, { revision, view: decorate(view, session) }, { etag });
     }
@@ -138,7 +157,9 @@ export function createApp(deps) {
     if (path.startsWith('commands/') && req.method === 'POST') {
       const name = path.slice('commands/'.length);
       const input = await readBody(req);
+      act.input = input;
       const { result, revision } = await runCommand(deps, { userId: user.id, name, input, channel: 'web', super: !!session.super });
+      act.revision = revision;
       publish(revision);
       const view = await db.tx((q) => buildView(q, user.id, env()));
       return json(res, 200, { ok: true, result, revision, view: decorate(view, session) }, { etag: `"${revision}"` });
@@ -168,19 +189,39 @@ export function createApp(deps) {
     } catch { json(res, 404, { error: 'not_found' }); }
   }
 
+  const userAgent = (req) => String(req.headers['user-agent'] || '').slice(0, 200);
+  /* Cada petición /api/* deja un evento con quién, qué, cuánto tardó y cómo terminó. */
+  async function recordRequest(req, path, act, startedAt, startedMs, res) {
+    const c = classify(path, req.method);
+    if (!c) return;
+    const status = res.statusCode || 0;
+    const ok = status < 400;
+    const kind = c.kind === 'login' && !ok ? 'login_failed' : c.kind;
+    const s = act.session || {};
+    await recordServerEvent(db, {
+      at: startedAt, testerId: s.testerId || null, userId: act.user ? act.user.id : null, role: act.user ? act.user.role : null, sid: s.sid || null,
+      source: 'server', kind, name: act.name || c.name, screen: null, target: null, durationMs: Math.round(performance.now() - startedMs),
+      ok, error: act.error || null, status, revision: act.revision == null ? null : act.revision, ip: clientIp(req), ua: userAgent(req),
+      data: act.input ? maskInput(act.input) : null,
+    });
+  }
   async function handler(req, res) {
+    const url = new URL(req.url, 'http://localhost');
+    const isApi = url.pathname === '/api' || url.pathname.startsWith('/api/');
+    const path = isApi ? (url.searchParams.get('path') || url.pathname.replace(/^\/api\/?/, '')).replace(/^\/+|\/+$/g, '') : null;
+    const startedAt = deps.now(), startedMs = performance.now();
+    const act = { startedAt };
     try {
-      const url = new URL(req.url, 'http://localhost');
-      if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
-        const path = (url.searchParams.get('path') || url.pathname.replace(/^\/api\/?/, '')).replace(/^\/+|\/+$/g, '');
-        return await api(req, res, path);
-      }
+      if (isApi) return await api(req, res, path, act);
       if (config.serverless) return json(res, 404, { error: 'not_found' });
       return await serveStatic(res, url.pathname);
     } catch (e) {
       const status = e.status || (e instanceof SyntaxError ? 400 : 500);
+      act.error = status === 500 ? 'internal_error' : e.code || e.message;
       if (status === 500) { console.error(e); return json(res, 500, { error: 'internal_error', message: null }); }
       return json(res, status, { error: e.code || e.message, message: e.detail || null });
+    } finally {
+      if (isApi) { if (!act.error && res.statusCode >= 400) act.error = res.errorCode || null; await recordRequest(req, path, act, startedAt, startedMs, res); }
     }
   }
   return { handler, publish };
