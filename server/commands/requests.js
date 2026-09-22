@@ -1,6 +1,6 @@
 import { register } from './index.js';
 import { requireCap, requireTitular, STAFF_ROLES } from './guards.js';
-import { createRequest, approveRequest, rejectRequest, acceptExcusa, cancelRequest } from '../domain/requests.js';
+import { createRequest, approveRequest, rejectRequest, acceptExcusa, cancelRequest, staffCancelRequest } from '../domain/requests.js';
 import { getRequest, getAttachment } from '../db/repo.js';
 import { deny, notFound, badRequest, conflict } from '../domain/errors.js';
 
@@ -63,6 +63,17 @@ register({
     handler: async (ctx, input) => {
       requireCap(ctx, 'decidir_excusas');
       return acceptExcusa(ctx, input.requestId, ctx.staff.id);
+    },
+  },
+  staff_cancel_request: {
+    roles: STAFF_ROLES,
+    handler: async (ctx, input) => {
+      requireCap(ctx, 'aprobar');
+      const r = await getRequest(ctx.q, input.requestId);
+      if (!r) notFound('request_not_found');
+      const reason = String(input.reason || '').trim();
+      if (!reason) badRequest('reason_required');
+      return staffCancelRequest(ctx, r.id, reason, ctx.staff.id);
     },
   },
 });

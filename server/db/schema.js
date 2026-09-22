@@ -92,4 +92,13 @@ CREATE INDEX IF NOT EXISTS activity_kind_name_at ON activity_events(kind, name, 
 CREATE UNIQUE INDEX IF NOT EXISTS requests_date_code ON requests(date, code) WHERE kind='salida' AND code IS NOT NULL;
 `,
   },
+  {
+    /* Pending proactive alerts (`alert_pickup`) waiting behind whatever the chat is currently doing
+       (a draft in progress, or an urgent `confirm_pickup`): a list of { requestId }, never overwriting
+       `step`/`draft`. See queueAlert/advanceAlert/releasePickupState in domain/requests.js. */
+    version: '005_conversation_alerts',
+    sql: `
+ALTER TABLE conversation_state ADD COLUMN IF NOT EXISTS alerts jsonb NOT NULL DEFAULT '[]';
+`,
+  },
 ];

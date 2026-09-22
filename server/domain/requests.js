@@ -49,6 +49,67 @@ async function loadSalida(ctx, id) {
   return req;
 }
 
+/* ---------- chat state around a request: queue proactive alerts, never lose one (L8/L9) ---------- */
+/* A proactive "does this look right?" notice never overwrites whatever the chat is already doing
+   (a draft in progress, an urgent `confirm_pickup`, or an earlier still-unanswered alert): it is
+   appended to `alerts` and surfaces once that step concludes (see advanceAlert, and handleStep in
+   bot/conversation.js, which calls it at every point a step ends). */
+export async function queueAlert(ctx, personId, requestId) {
+  const cs = await getConversation(ctx.q, personId, ctx);
+  if (cs && cs.step) {
+    await setConversation(ctx.q, personId, { step: cs.step, requestId: cs.requestId, draft: cs.draft, alerts: [...(cs.alerts || []), { requestId }] }, ctx.now);
+  } else {
+    await setConversation(ctx.q, personId, { step: 'alert_pickup', requestId, draft: null, alerts: [] }, ctx.now);
+  }
+}
+/* Called once the current step for `personId` is resolved (answered, cancelled, or otherwise done):
+   surfaces the next queued alert, if any, or clears the conversation. */
+export async function advanceAlert(ctx, personId) {
+  const cs = await getConversation(ctx.q, personId, ctx);
+  const alerts = (cs && cs.alerts) || [];
+  if (alerts.length) {
+    const [next, ...rest] = alerts;
+    await setConversation(ctx.q, personId, { step: 'alert_pickup', requestId: next.requestId, draft: null, alerts: rest }, ctx.now);
+  } else {
+    await clearConversation(ctx.q, personId);
+  }
+}
+/* Scrubs one request out of `personId`'s chat state, whether it is the active alert_pickup/
+   confirm_pickup step or merely queued -- used whenever that request stops needing an answer
+   through another channel (cancelled, rejected, retired, or cancelled by staff): L8. */
+export async function releasePickupState(ctx, personId, requestId) {
+  const cs = await getConversation(ctx.q, personId, ctx);
+  if (!cs) return;
+  const isActive = (cs.step === 'alert_pickup' || cs.step === 'confirm_pickup') && cs.requestId === requestId;
+  const alerts = (cs.alerts || []).filter((a) => a.requestId !== requestId);
+  if (isActive) {
+    if (alerts.length) {
+      const [next, ...rest] = alerts;
+      await setConversation(ctx.q, personId, { step: 'alert_pickup', requestId: next.requestId, draft: null, alerts: rest }, ctx.now);
+    } else {
+      await clearConversation(ctx.q, personId);
+    }
+  } else if (alerts.length !== (cs.alerts || []).length) {
+    await setConversation(ctx.q, personId, { step: cs.step, requestId: cs.requestId, draft: cs.draft, alerts }, ctx.now);
+  }
+}
+/* Narrower than releasePickupState: releases only an urgent confirm_pickup (moot once the student
+   has actually exited -- there is nothing left to confirm). A still-unanswered *alert_pickup* is
+   deliberately left alone by markExit: "do you recognize this person" stays a meaningful question
+   even after the fact, and answering NO late still needs to reach the titular's family and
+   Recepción (L9) -- which cannot happen if the state was already wiped out from under them. */
+export async function releaseConfirmState(ctx, personId, requestId) {
+  const cs = await getConversation(ctx.q, personId, ctx);
+  if (!cs || cs.step !== 'confirm_pickup' || cs.requestId !== requestId) return;
+  const alerts = cs.alerts || [];
+  if (alerts.length) {
+    const [next, ...rest] = alerts;
+    await setConversation(ctx.q, personId, { step: 'alert_pickup', requestId: next.requestId, draft: null, alerts: rest }, ctx.now);
+  } else {
+    await clearConversation(ctx.q, personId);
+  }
+}
+
 export async function createRequest(ctx, data) {
   const st = await getStudent(ctx.q, data.studentId);
   if (!st) notFound('student_not_found');
@@ -65,6 +126,8 @@ export async function createRequest(ctx, data) {
     req.pickupBy = data.pickupBy || by.id;
     const candidate = (await pickupCandidates(ctx, st.id, req.date)).find((c) => c.person.id === req.pickupBy);
     if (!candidate) badRequest('pickup_not_candidate');
+    const dup = (await listRequests(ctx.q, { studentIds: [st.id], date: req.date, kind: 'salida' })).find((r) => ['pendiente', 'aprobada'].includes(r.status));
+    if (dup) conflict('duplicate_salida');
     req.code = await uniqueCode(ctx, req.date);
     req.pickupKind = candidate.kind;
   } else if (req.kind === 'excusa') {
@@ -133,7 +196,7 @@ export async function approveRequest(ctx, id, opts = {}) {
     await hist(ctx, req, 'Aviso proactivo a los titulares: persona ' + (el.kind === 'siempre' ? 'nueva' : el.kind));
     for (const t of st.titulares) {
       await notifyPerson(ctx, t, '⚠️ AVISO: hoy retira a ' + firstName(st.name) + ' ' + pk.name + ' (' + pk.relation + ') con ' + why + '. Si no lo reconoces responde NO y se cancela la salida.', { buttons: ['Es correcto', 'NO'] });
-      await setConversation(ctx.q, t, { step: 'alert_pickup', requestId: req.id }, ctx.now);
+      await queueAlert(ctx, t, req.id);
     }
   }
   await notifyRole(ctx, 'garita', 'Salida aprobada: ' + st.name + ' ' + fmtTime(req.time) + ' · retira ' + pk.name + ' · ' + pickupPoint);
@@ -150,7 +213,10 @@ export async function rejectRequest(ctx, id, reason, byStaffId) {
   await hist(ctx, req, 'Rechazada por ' + staff.name + ': ' + reason);
   await logEvent(ctx, 'Rechazó ' + (req.kind === 'salida' ? 'salida' : 'excusa') + ' de ' + st.name + ': ' + reason, staff.name);
   const what = req.kind === 'salida' ? 'Salida de ' + st.name + ' ' + fmtDate(ctx, req.date) + ' ' + fmtTime(req.time) : 'Excusa de ' + st.name + ' (' + fmtDate(ctx, req.date) + ')';
-  for (const t of st.titulares) await notifyPerson(ctx, t, '❌ ' + what + ' no fue aprobada. Motivo: ' + reason + '. Contacta a recepción al ' + ctx.settings.school.phone + '.');
+  for (const t of st.titulares) {
+    await notifyPerson(ctx, t, '❌ ' + what + ' no fue aprobada. Motivo: ' + reason + '. Contacta a recepción al ' + ctx.settings.school.phone + '.');
+    await releasePickupState(ctx, t, id);
+  }
   return getRequest(ctx.q, id);
 }
 
@@ -177,6 +243,34 @@ export async function cancelRequest(ctx, id, personId) {
   await logEvent(ctx, 'Canceló solicitud de ' + st.name, p.name);
   await notifyRole(ctx, 'recepcion', 'Solicitud cancelada por el padre: ' + st.name + ' ' + (req.time ? fmtTime(req.time) : fmtDate(ctx, req.date)));
   if (req.kind === 'salida') await notifyRole(ctx, 'garita', 'Salida cancelada: ' + st.name + ' ' + fmtTime(req.time));
+  for (const t of st.titulares) await releasePickupState(ctx, t, id);
+  if (req.pickupBy && !st.titulares.includes(req.pickupBy)) await releasePickupState(ctx, req.pickupBy, id);
+  return getRequest(ctx.q, id);
+}
+
+/* ---------- staff: cancel a pendiente/aprobada salida or excusa (L15) ---------- */
+export async function staffCancelRequest(ctx, id, reason, byStaffId) {
+  const req = await loadSalida(ctx, id);
+  if (!['pendiente', 'aprobada'].includes(req.status)) conflict('request_not_cancellable');
+  const st = await getStudent(ctx.q, req.studentId);
+  const staff = await getStaff(ctx.q, byStaffId);
+  const wasApproved = req.status === 'aprobada';
+  await patchRow(ctx.q, 'requests', id, { status: 'cancelada' });
+  await hist(ctx, req, 'Cancelada por el personal (' + staff.name + '): ' + reason);
+  await logEvent(ctx, 'Canceló ' + (req.kind === 'salida' ? 'salida' : 'excusa') + ' de ' + st.name + ': ' + reason, staff.name);
+  const what = req.kind === 'salida' ? 'Salida de ' + st.name + ' ' + fmtDate(ctx, req.date) + (req.time ? ' ' + fmtTime(req.time) : '') : 'Excusa de ' + st.name + ' (' + fmtDate(ctx, req.date) + ')';
+  for (const t of st.titulares) {
+    await notifyPerson(ctx, t, '⛔ ' + what + ' fue cancelada por el personal. Motivo: ' + reason + '.');
+    await releasePickupState(ctx, t, id);
+  }
+  if (wasApproved && req.pickupBy) {
+    const pk = await getPerson(ctx.q, req.pickupBy);
+    if (pk && pk.hasAccount && !st.titulares.includes(pk.id)) {
+      await notifyPerson(ctx, pk.id, '⛔ La salida de ' + st.name + ' que ibas a retirar fue cancelada por el personal. Motivo: ' + reason + '.');
+    }
+  }
+  if (req.pickupBy && !st.titulares.includes(req.pickupBy)) await releasePickupState(ctx, req.pickupBy, id);
+  if (wasApproved) await notifyRole(ctx, 'garita', '⛔ Salida cancelada por el personal: ' + st.name + (req.time ? ' ' + fmtTime(req.time) : ''));
   return getRequest(ctx.q, id);
 }
 
@@ -196,14 +290,27 @@ export async function requestConfirmation(ctx, id, byStaffId) {
   await logEvent(ctx, 'Solicitó confirmación de entrega de ' + st.name + ' a ' + pk.name, staff.name);
   for (const t of st.titulares) {
     await notifyPerson(ctx, t, '⚠️ ' + pk.name + ' (' + pk.relation + ') está en la garita para retirar a ' + st.name + '. Es una autorización de UNA SOLA VEZ. ¿Confirmas la entrega? Responde SÍ o NO.', { buttons: ['Sí, confirmo', 'No'] });
-    await setConversation(ctx.q, t, { step: 'confirm_pickup', requestId: id }, ctx.now);
+    /* An urgent, blocking step: it takes over the chat (the person is physically at the gate),
+       overwriting any draft in progress -- but any proactive alert already queued for this titular
+       stays queued instead of being dropped. */
+    const cs = await getConversation(ctx.q, t, ctx);
+    await setConversation(ctx.q, t, { step: 'confirm_pickup', requestId: id, draft: null, alerts: (cs && cs.alerts) || [] }, ctx.now);
   }
   return getRequest(ctx.q, id);
 }
 
+/* `confirm_pickup` only ever acts on a *pendiente* confirmation: once it has been answered (denied
+   or confirmed), the answer stands until garita explicitly requests a new one (requestConfirmation),
+   which is what actually reopens it -- L7. Without this, whichever answer lands last would win,
+   including a stale "Sí" arriving after a titular already said "NO". */
 export async function confirmPickup(ctx, id, personId, yes) {
   const req = await loadSalida(ctx, id);
   if (req.status !== 'aprobada') conflict('request_not_approved');
+  const current = await pickupEligibility(ctx, req.studentId, req.pickupBy, req.date);
+  if (current.kind !== 'una_vez') conflict('confirmation_not_needed');
+  if (!req.confirmation || req.confirmation.status !== 'pendiente') {
+    conflict(req.confirmation && req.confirmation.status === 'negada' ? 'pickup_denied' : 'confirmation_not_requested');
+  }
   const st = await getStudent(ctx.q, req.studentId);
   const pk = await getPerson(ctx.q, req.pickupBy);
   const p = await getPerson(ctx.q, personId);
@@ -213,10 +320,9 @@ export async function confirmPickup(ctx, id, personId, yes) {
   await notifyRole(ctx, 'garita', (yes ? '✅ Confirmado' : '⛔ NEGADO') + ' por ' + p.name + ': entrega de ' + st.name + ' a ' + pk.name);
   for (const t of st.titulares.filter((x) => x !== personId)) {
     await notifyPerson(ctx, t, (yes ? '✅ ' : '⛔ ') + p.name + (yes ? ' confirmó' : ' negó') + ' la entrega de ' + st.name + ' a ' + pk.name + '.');
-    const cs = await getConversation(ctx.q, t);
-    if (cs && cs.step === 'confirm_pickup') await clearConversation(ctx.q, t);
+    await releasePickupState(ctx, t, id);
   }
-  await clearConversation(ctx.q, personId);
+  await releasePickupState(ctx, personId, id);
   return getRequest(ctx.q, id);
 }
 
@@ -239,10 +345,9 @@ export async function markExit(ctx, id, byStaffId) {
   const hora = fmtTime(nowHHMM(ctx.now, ctx.tz));
   for (const t of st.titulares) {
     await notifyPerson(ctx, t, '🚪 ' + st.name + ' salió por ' + req.pickupPoint + ' a las ' + hora + ', retirado(a) por ' + describePickup(req, pk) + '. Confirmó ' + officer.name + ' (' + (officer.title || roleName(officer.role)) + ').');
-    const cs = await getConversation(ctx.q, t);
-    if (cs && cs.step === 'alert_pickup') await clearConversation(ctx.q, t);
+    await releaseConfirmState(ctx, t, id);
   }
-  if (pk.hasAccount && !st.titulares.includes(pk.id)) await notifyPerson(ctx, pk.id, '🚪 Registramos que retiraste a ' + st.name + ' a las ' + hora + '. ¡Gracias!');
+  if (pk.hasAccount && !st.titulares.includes(pk.id)) { await notifyPerson(ctx, pk.id, '🚪 Registramos que retiraste a ' + st.name + ' a las ' + hora + '. ¡Gracias!'); await releaseConfirmState(ctx, pk.id, id); }
   await notifyTeachers(ctx, st.id, st.name + ' salió a las ' + hora);
   return getRequest(ctx.q, id);
 }

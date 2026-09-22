@@ -45,7 +45,9 @@ test('roles and family scope are enforced', async () => {
   const t = await makeTestApp();
   await assert.rejects(t.run('create_salida', 'u_p5', { studentId: 'e1', date: '2026-09-18', time: '13:00', pickupBy: 'p5', reason: 'x' }), /forbidden_not_titular/);
   await assert.rejects(t.run('create_salida', 'u_s2', { studentId: 'e1', date: '2026-09-18', time: '13:00', pickupBy: 'p1', reason: 'x' }), /forbidden_role/);
-  const { result: r } = await t.run('create_salida', 'u_p7', { studentId: 'e4', date: '2026-09-18', time: '11:00', pickupBy: 'p7', reason: 'x' });
+  // Tomorrow, not today: the seed already carries a pendiente salida for Emily today (r_h3), and a
+  // second active salida for the same student and date is now rejected as a duplicate (L15).
+  const { result: r } = await t.run('create_salida', 'u_p7', { studentId: 'e4', date: '2026-09-19', time: '11:00', pickupBy: 'p7', reason: 'x' });
   await assert.rejects(t.run('cancel_request', 'u_p1', { requestId: r.id }), /forbidden_not_titular/);
   await assert.rejects(t.run('approve_request', 'u_s3', { requestId: r.id }), /forbidden_capability:aprobar/);
   await assert.rejects(t.run('approve_request', 'u_s6', { requestId: r.id }), /forbidden_capability:aprobar/);
@@ -92,8 +94,8 @@ test('unusual pickups trigger the proactive alert with buttons and a chat step',
   assert.equal(alerts.length, 1);
   assert.deepEqual(alerts[0].buttons, ['Es correcto', 'NO']);
   assert.match(alerts[0].text, /autorización por tiempo \(2026-09-16 → 2026-09-30\)/);
-  assert.deepEqual(await getConversation(t.db, 'p1'), { step: 'alert_pickup', requestId: r.id, draft: null });
-  assert.deepEqual(await getConversation(t.db, 'p2'), { step: 'alert_pickup', requestId: r.id, draft: null });
+  assert.deepEqual(await getConversation(t.db, 'p1'), { step: 'alert_pickup', requestId: r.id, draft: null, alerts: [] });
+  assert.deepEqual(await getConversation(t.db, 'p2'), { step: 'alert_pickup', requestId: r.id, draft: null, alerts: [] });
   await t.close();
 });
 
@@ -152,10 +154,14 @@ test('approveRequest revalidates who retrieves: revoked eligibility and a missin
   assert.equal(r.status, 'pendiente', 'one-time authorizations need manual review');
   await t.run('revoke_authorization', 'u_p1', { authorizationId: 'a4' });
   await assert.rejects(t.run('approve_request', 'u_s2', { requestId: r.id }), (e) => e.status === 409 && e.code === 'pickup_no_longer_eligible');
+  /* r is still pendiente (the approval never went through): cancel it first, since a second active
+     salida for the same student and date is now rejected as a duplicate (L15). */
+  await t.run('cancel_request', 'u_p1', { requestId: r.id });
 
   const { result: r2 } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '13:00', pickupBy: 'p1', reason: 'y' });
   assert.equal(r2.status, 'aprobada', 'a titular with enough notice auto-approves');
-  const { result: r3 } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '11:00', pickupBy: 'p1', reason: 'z' });
+  // e2 (Sofía) is Carlos's other child: a different student avoids clashing with r2, still active for e1.
+  const { result: r3 } = await t.run('create_salida', 'u_p1', { studentId: 'e2', date: '2026-09-18', time: '11:00', pickupBy: 'p1', reason: 'z' });
   assert.equal(r3.status, 'pendiente', 'short notice needs Recepción');
   /* Simulate a stale row (legacy data, or a person deleted since): approveRequest must never throw a
      TypeError reading properties off a null person. */
@@ -187,6 +193,49 @@ test('approveRequest rejects a salida whose date is already in the past', async 
   assert.equal(r.status, 'pendiente', 'short notice needs Recepción');
   t.clock.now = new Date('2026-09-19T15:00:00Z'); // next day: nobody ever decided on it
   await assert.rejects(t.run('approve_request', 'u_s2', { requestId: r.id }), (e) => e.status === 409 && e.code === 'date_in_past');
+  await t.close();
+});
+
+test('a second active salida for the same student and date is rejected as a duplicate (L15)', async () => {
+  const t = await makeTestApp();
+  const { result: r } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '13:00', pickupBy: 'p1', reason: 'x' });
+  assert.equal(r.status, 'aprobada');
+  await assert.rejects(t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '14:00', pickupBy: 'p2', reason: 'y' }), (e) => e.status === 409 && e.code === 'duplicate_salida');
+  // A still-pendiente one blocks a new one too, not just an aprobada one.
+  const { result: r2 } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-19', time: '11:00', pickupBy: 'p5', reason: 'z' });
+  assert.equal(r2.status, 'pendiente', 'una_vez needs manual review');
+  await assert.rejects(t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-19', time: '12:00', pickupBy: 'p1', reason: 'w' }), (e) => e.code === 'duplicate_salida');
+  // Cancelling frees the date up again.
+  await t.run('cancel_request', 'u_p1', { requestId: r.id });
+  const { result: r3 } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '14:00', pickupBy: 'p2', reason: 'y' });
+  assert.equal(r3.status, 'aprobada');
+  // A different student, or a different date, is never a duplicate.
+  await t.run('create_salida', 'u_p1', { studentId: 'e2', date: '2026-09-18', time: '14:30', pickupBy: 'p1', reason: 'z2' });
+  await t.close();
+});
+
+test('staff_cancel_request notifies titulares and the account-holding authorized person, and garita only when it was approved (L15)', async () => {
+  const t = await makeTestApp();
+  const { result: r } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '13:00', pickupBy: 'p5', reason: 'x' });
+  assert.equal(r.status, 'pendiente', 'una_vez needs manual review');
+  await assert.rejects(t.run('staff_cancel_request', 'u_s3', { requestId: r.id, reason: 'x' }), /forbidden_capability:aprobar/);
+  await assert.rejects(t.run('staff_cancel_request', 'u_s2', { requestId: r.id, reason: '  ' }), /reason_required/);
+  const { result: c1 } = await t.run('staff_cancel_request', 'u_s2', { requestId: r.id, reason: 'Cambio de instrucciones de la familia' });
+  assert.equal(c1.status, 'cancelada');
+  assert.match((await texts(t.db, { personId: 'p1' })).at(-1), /^⛔ Salida de Joseph Rodríguez hoy 1:00 pm fue cancelada por el personal\. Motivo: Cambio de instrucciones de la familia\.$/);
+  assert.match((await texts(t.db, { personId: 'p2' })).at(-1), /^⛔ Salida de Joseph Rodríguez hoy 1:00 pm fue cancelada por el personal/);
+  // Never approved: Laura (p5) never got a code, and garita was never told about it.
+  assert.equal((await texts(t.db, { personId: 'p5' })).length, 0);
+  assert.equal((await texts(t.db, { role: 'garita' })).length, 0);
+
+  const { result: r2 } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-19', time: '13:00', pickupBy: 'p5', reason: 'y' });
+  await t.run('approve_request', 'u_s2', { requestId: r2.id });
+  const garitaBefore = (await texts(t.db, { role: 'garita' })).length;
+  const { result: c2 } = await t.run('staff_cancel_request', 'u_s2', { requestId: r2.id, reason: 'Se resolvió el trámite' });
+  assert.equal(c2.status, 'cancelada');
+  assert.match((await texts(t.db, { personId: 'p5' })).at(-1), /^⛔ La salida de Joseph Rodríguez que ibas a retirar fue cancelada por el personal\. Motivo: Se resolvió el trámite\.$/);
+  assert.ok((await texts(t.db, { role: 'garita' })).length > garitaBefore, 'garita is told, since it had been approved');
+  await assert.rejects(t.run('staff_cancel_request', 'u_s2', { requestId: r2.id, reason: 'otra vez' }), /request_not_cancellable/);
   await t.close();
 });
 

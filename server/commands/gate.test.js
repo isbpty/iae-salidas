@@ -35,6 +35,29 @@ test('one-time pickup: gate asks, a titular confirms, gate marks the exit and th
   await t.close();
 });
 
+test('a denied confirmation blocks a later "Sí"; only a fresh request_confirmation reopens it (L7)', async () => {
+  const t = await makeTestApp();
+  const { result: r } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '13:00', pickupBy: 'p5', reason: 'x' });
+  await t.run('approve_request', 'u_s2', { requestId: r.id });
+  await t.run('request_confirmation', 'u_s6', { requestId: r.id });
+  await t.run('confirm_pickup', 'u_p2', { requestId: r.id, confirmed: false }); // Ana says NO
+  // Carlos's "Sí" (in flight before he saw Ana's NO, say) must not win over the denial.
+  await assert.rejects(t.run('confirm_pickup', 'u_p1', { requestId: r.id, confirmed: true }), (e) => e.status === 409 && e.code === 'pickup_denied');
+  // The denial itself cannot be re-applied either: it already stands.
+  await assert.rejects(t.run('confirm_pickup', 'u_p1', { requestId: r.id, confirmed: false }), (e) => e.status === 409 && e.code === 'pickup_denied');
+  // A request that was never asked for at all is rejected too, distinctly from a denial.
+  const { result: r2 } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-19', time: '13:00', pickupBy: 'p5', reason: 'y' });
+  await t.run('approve_request', 'u_s2', { requestId: r2.id });
+  await assert.rejects(t.run('confirm_pickup', 'u_p1', { requestId: r2.id, confirmed: true }), (e) => e.status === 409 && e.code === 'confirmation_not_requested');
+  // Only a brand-new request_confirmation from garita reopens the denied one; the denial stays in the history.
+  const { result: reopened } = await t.run('request_confirmation', 'u_s6', { requestId: r.id });
+  assert.equal(reopened.confirmation.status, 'pendiente');
+  assert.ok(reopened.history.some((h) => /Entrega NEGADA por Ana Pérez/.test(h.text)), 'the earlier denial stays in the history');
+  const { result: ok } = await t.run('confirm_pickup', 'u_p1', { requestId: r.id, confirmed: true });
+  assert.equal(ok.confirmation.status, 'confirmada');
+  await t.close();
+});
+
 test('a denied confirmation blocks the exit; confirmation is not offered for ordinary pickups', async () => {
   const t = await makeTestApp();
   const { result: r } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '13:00', pickupBy: 'p5', reason: 'x' });

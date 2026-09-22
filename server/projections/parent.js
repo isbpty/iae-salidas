@@ -45,7 +45,7 @@ export async function parentView(ctx) {
     requests,
     notifications,
     chat: await listChat(ctx.q, me.id),
-    chatState: await getConversation(ctx.q, me.id),
+    chatState: await getConversation(ctx.q, me.id, ctx),
     routes,
     trips,
     gpsNow: Object.fromEntries(routes.map((r) => [r.id, ctx.gps.position(r, ctx)])),

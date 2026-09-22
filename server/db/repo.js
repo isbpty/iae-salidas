@@ -1,4 +1,5 @@
 import { camel, snake } from './rows.js';
+import { todayISO } from '../domain/time.js';
 
 const one = (rows) => camel(rows[0] || null);
 const all = (rows) => rows.map(camel);
@@ -144,15 +145,28 @@ export async function countPendingOut(q, chatKey, at) {
   const r = await q.query("SELECT count(*)::int AS c FROM chat_messages WHERE chat_key=$1 AND direction='out' AND pending_until > $2", [chatKey, at.toISOString()]);
   return r[0].c;
 }
-export async function getConversation(q, key) { const r = one(await q.query('SELECT * FROM conversation_state WHERE chat_key=$1', [key])); return r ? { step: r.step, requestId: r.requestId, draft: r.draft } : null; }
+/* `ctx` (optional) is `{ now, tz }`: a state whose `updated_at` is more than 2 h old, or from a
+   different calendar day in the school's timezone, is treated as gone (and dropped) instead of
+   resurrecting a stale draft or alert for a later, unrelated message (L8). Callers without a `ctx`
+   (rare: low-level tooling) skip the TTL check. */
+export async function getConversation(q, key, ctx = {}) {
+  const r = one(await q.query('SELECT * FROM conversation_state WHERE chat_key=$1', [key]));
+  if (!r) return null;
+  if (ctx.now) {
+    const updated = new Date(r.updatedAt);
+    const stale = ctx.now.getTime() - updated.getTime() > 2 * 3600 * 1000 || (ctx.tz && todayISO(ctx.now, ctx.tz) !== todayISO(updated, ctx.tz));
+    if (stale) { await clearConversation(q, key); return null; }
+  }
+  return { step: r.step, requestId: r.requestId, draft: r.draft, alerts: r.alerts || [] };
+}
 export async function setConversation(q, key, state, at) {
-  await q.query('INSERT INTO conversation_state(chat_key, step, request_id, draft, updated_at) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (chat_key) DO UPDATE SET step=EXCLUDED.step, request_id=EXCLUDED.request_id, draft=EXCLUDED.draft, updated_at=EXCLUDED.updated_at',
-    [key, state.step, state.requestId || null, JSON.stringify(state.draft || null), at.toISOString()]);
+  await q.query('INSERT INTO conversation_state(chat_key, step, request_id, draft, alerts, updated_at) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (chat_key) DO UPDATE SET step=EXCLUDED.step, request_id=EXCLUDED.request_id, draft=EXCLUDED.draft, alerts=EXCLUDED.alerts, updated_at=EXCLUDED.updated_at',
+    [key, state.step, state.requestId || null, JSON.stringify(state.draft || null), JSON.stringify(state.alerts || []), at.toISOString()]);
 }
 export const clearConversation = (q, key) => q.query('DELETE FROM conversation_state WHERE chat_key=$1', [key]);
 export async function listConversations(q) {
   const out = {};
-  for (const r of all(await q.query('SELECT * FROM conversation_state'))) out[r.chatKey] = { step: r.step, requestId: r.requestId, draft: r.draft };
+  for (const r of all(await q.query('SELECT * FROM conversation_state'))) out[r.chatKey] = { step: r.step, requestId: r.requestId, draft: r.draft, alerts: r.alerts || [] };
   return out;
 }
 

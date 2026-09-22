@@ -39,13 +39,15 @@ test('salida flow: confirm → auto-approved; short notice → pending; unknown 
   assert.match((await lastBot(t.db, 'p1')).text, /^✅ Salida aprobada: Joseph Rodríguez hoy a las 3:30 pm/);
   assert.equal(await getConversation(t.db, 'p1'), null);
 
-  await say(t, 'u_p1', 'A Joseph lo retira la abuela a las 11');
+  // Sofía, not Joseph: Joseph already has an active (aprobada) salida today, and a second one for the
+  // same student and date is now rejected as a duplicate (L15) -- so this exercises a different child.
+  await say(t, 'u_p1', 'A Sofía la retira la abuela a las 11');
   assert.match((await lastBot(t.db, 'p1')).text, /• Retira: María Pérez \(Abuela\)/);
   await say(t, 'u_p1', 'Sí');
-  const pend = (await listRequests(t.db, { studentIds: ['e1'] }))[0];
+  const pend = (await listRequests(t.db, { studentIds: ['e2'] }))[0];
   assert.equal(pend.status, 'pendiente');
   assert.equal(pend.pickupBy, 'p3');
-  assert.match((await lastBot(t.db, 'p1')).text, /^📝 Recibimos tu solicitud de salida de Joseph Rodríguez hoy a las 11:00 am/);
+  assert.match((await lastBot(t.db, 'p1')).text, /^📝 Recibimos tu solicitud de salida de Sofía Rodríguez hoy a las 11:00 am/);
 
   await say(t, 'u_p1', 'A Joseph lo retira el vecino a las 2 pm');
   const ask = await lastBot(t.db, 'p1');
@@ -140,6 +142,119 @@ test('validation errors from create_salida reach the parent as a chat reply, not
   assert.match(m.text, /hora ya pasó/i);
   assert.equal((await listRequests(t.db, { studentIds: ['e1'] })).length, 0, 'nothing was created');
   assert.equal(await getConversation(t.db, 'p1'), null, 'the bot does not get stuck');
+  await t.close();
+});
+
+test('cancelling from the app releases the other titular stuck in confirm_pickup, and their stale reply no longer crashes the bot (L8)', async () => {
+  const t = await makeTestApp();
+  const { result: r } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '13:00', pickupBy: 'p5', reason: 'x' });
+  await t.run('approve_request', 'u_s2', { requestId: r.id });
+  await say(t, 'u_p1', 'Es correcto'); // Carlos clears his own proactive alert first
+  await t.run('request_confirmation', 'u_s6', { requestId: r.id });
+  assert.equal((await getConversation(t.db, 'p1')).step, 'confirm_pickup');
+  assert.equal((await getConversation(t.db, 'p2')).step, 'confirm_pickup');
+  await t.run('cancel_request', 'u_p1', { requestId: r.id }); // Carlos cancels from the app
+  assert.equal(await getConversation(t.db, 'p2'), null, "Ana's stuck confirm_pickup state is released");
+  // Ana's stale "Sí, confirmo" no longer rolls back her own message with a 409, and no longer gets stuck.
+  await say(t, 'u_p2', 'Sí, confirmo');
+  assert.match((await lastBot(t.db, 'p2')).text, /^No te entendí 🤔/);
+  await say(t, 'u_p2', 'hola');
+  assert.match((await lastBot(t.db, 'p2')).text, /^Hola Ana/);
+  await t.close();
+});
+
+test('a stale conversation state (older than 2h) is ignored, not resumed as an answer (L8)', async () => {
+  const t = await makeTestApp();
+  await say(t, 'u_p1', 'Necesito retirar temprano'); // enters ask_child, leaving a draft behind
+  assert.equal((await getConversation(t.db, 'p1')).step, 'ask_child');
+  t.clock.now = new Date(t.clock.now.getTime() + 3 * 3600 * 1000); // +3h, same day
+  await say(t, 'u_p1', 'Sofía');
+  assert.match((await lastBot(t.db, 'p1')).text, /^No te entendí 🤔/, '"Sofía" is not read as a 3h-late answer to "¿A cuál de tus hijos?"');
+  assert.equal(await getConversation(t.db, 'p1'), null);
+  await t.close();
+});
+
+test('a conversation state from a different school day is ignored even if under 2h old (L8)', async () => {
+  const t = await makeTestApp({ now: new Date('2026-09-19T04:50:00Z') }); // 2026-09-18 23:50 in America/Panama
+  await say(t, 'u_p1', 'Necesito retirar temprano');
+  assert.equal((await getConversation(t.db, 'p1')).step, 'ask_child');
+  t.clock.now = new Date('2026-09-19T05:10:00Z'); // 2026-09-19 00:10 Panama: 20 minutes later, but a new day
+  await say(t, 'u_p1', 'Sofía');
+  assert.match((await lastBot(t.db, 'p1')).text, /^No te entendí 🤔/, "yesterday's draft is dropped once the school day turns over, even minutes later");
+  assert.equal(await getConversation(t.db, 'p1'), null);
+  await t.close();
+});
+
+test('a proactive alert queues behind a draft in progress instead of overwriting it, and surfaces once the draft ends (L9)', async () => {
+  const t = await makeTestApp();
+  // Carlos starts a salida draft for Sofía and stops partway, at ask_time.
+  await say(t, 'u_p1', 'Necesito retirar a Sofía temprano');
+  assert.equal((await getConversation(t.db, 'p1')).step, 'ask_time');
+
+  // Meanwhile, an unrelated approval for Joseph fires a proactive alert to both of his titulares.
+  const { result: r } = await t.run('create_salida', 'u_p2', { studentId: 'e1', date: '2026-09-18', time: '13:00', pickupBy: 'p4', reason: 'x' });
+  assert.equal(r.status, 'aprobada', 'temporal authorizations still auto-approve');
+  const cs = await getConversation(t.db, 'p1');
+  assert.equal(cs.step, 'ask_time', "the draft in progress survives the alert -- it is not overwritten");
+  assert.equal(cs.draft.studentId, 'e2');
+  assert.deepEqual(cs.alerts, [{ requestId: r.id }], 'the alert waits behind the draft instead');
+
+  // Carlos finishes his own draft undisturbed...
+  await say(t, 'u_p1', '4 pm');
+  await say(t, 'u_p1', 'Sí');
+  assert.match((await lastBot(t.db, 'p1')).text, /^✅ Salida aprobada: Sofía Rodríguez hoy a las 4:00 pm/);
+  // ...and only then does the queued alert surface.
+  assert.deepEqual(await getConversation(t.db, 'p1'), { step: 'alert_pickup', requestId: r.id, draft: null, alerts: [] });
+  await say(t, 'u_p1', 'Es correcto');
+  assert.match((await lastBot(t.db, 'p1')).text, /^👍 Gracias, queda confirmado\./);
+  assert.equal(await getConversation(t.db, 'p1'), null);
+  await t.close();
+});
+
+test('two proactive alerts in a row: NO cancels the one currently shown, then the next queued one surfaces (L9)', async () => {
+  const t = await makeTestApp();
+  const { result: r1 } = await t.run('create_salida', 'u_p2', { studentId: 'e1', date: '2026-09-18', time: '13:00', pickupBy: 'p4', reason: 'x' });
+  assert.equal(r1.status, 'aprobada');
+  const { result: r2 } = await t.run('create_salida', 'u_p2', { studentId: 'e1', date: '2026-09-19', time: '13:00', pickupBy: 'p4', reason: 'y' });
+  assert.equal(r2.status, 'aprobada');
+  assert.deepEqual(await getConversation(t.db, 'p1'), { step: 'alert_pickup', requestId: r1.id, draft: null, alerts: [{ requestId: r2.id }] });
+
+  await say(t, 'u_p1', 'NO'); // answers the alert currently shown (r1), not silently the last one queued
+  assert.equal((await listRequests(t.db, { studentIds: ['e1'], date: '2026-09-18' }))[0].status, 'cancelada');
+  assert.equal((await listRequests(t.db, { studentIds: ['e1'], date: '2026-09-19' }))[0].status, 'aprobada', 'r2 is untouched');
+  assert.equal((await getConversation(t.db, 'p1')).step, 'alert_pickup');
+  assert.equal((await getConversation(t.db, 'p1')).requestId, r2.id, 'the second, still-unanswered alert now surfaces');
+  await say(t, 'u_p1', 'NO');
+  assert.equal((await listRequests(t.db, { studentIds: ['e1'], date: '2026-09-19' }))[0].status, 'cancelada');
+  assert.equal(await getConversation(t.db, 'p1'), null);
+  await t.close();
+});
+
+test('unrecognized text on a proactive alert repeats the question instead of dropping it (L9)', async () => {
+  const t = await makeTestApp();
+  const { result: r } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '13:00', pickupBy: 'p4', reason: 'x' });
+  assert.equal(r.status, 'aprobada');
+  assert.equal((await getConversation(t.db, 'p2')).step, 'alert_pickup');
+  await say(t, 'u_p2', '¿quién es?');
+  assert.match((await lastBot(t.db, 'p2')).text, /Responde "Es correcto" o "NO"/);
+  assert.equal((await getConversation(t.db, 'p2')).step, 'alert_pickup', 'the alert is still pending, not silently dropped');
+  await say(t, 'u_p2', 'NO');
+  assert.equal((await listRequests(t.db, { studentIds: ['e1'] }))[0].status, 'cancelada');
+  await t.close();
+});
+
+test('a late "NO" on a proactive alert after the student already left points to Recepción and warns the school (L9)', async () => {
+  const t = await makeTestApp();
+  const { result: r } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '13:00', pickupBy: 'p4', reason: 'x' });
+  assert.equal(r.status, 'aprobada');
+  await t.run('mark_exit', 'u_s6', { requestId: r.id });
+  // Carlos never answered the earlier proactive alert; his late NO arrives after the student left.
+  await say(t, 'u_p1', 'NO');
+  const m = await lastBot(t.db, 'p1');
+  assert.match(m.text, /ya salió a las 10:30 am con Luis Rodríguez/);
+  assert.match(m.text, /llama a recepción al \+507 6800-0000/);
+  assert.match((await listNotifications(t.db, { role: 'recepcion' })).at(-1).text, /NO reconoce a Luis Rodríguez.*ya salió/);
+  assert.equal(await getConversation(t.db, 'p1'), null);
   await t.close();
 });
 
