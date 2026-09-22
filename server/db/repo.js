@@ -76,7 +76,7 @@ export async function studentsOfPerson(q, personId) {
 }
 
 /* ---------- requests ---------- */
-async function hydrateRequests(q, rows) {
+export async function hydrateRequests(q, rows) {
   if (!rows.length) return [];
   const ids = rows.map((r) => r.id);
   const events = await q.query(`SELECT request_id, at, text FROM request_events WHERE request_id IN (${marks(ids.length)}) ORDER BY id`, ids);
