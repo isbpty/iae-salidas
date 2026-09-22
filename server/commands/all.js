@@ -6,4 +6,5 @@ import './authorizations.js';
 import './bus.js';
 import './whatsapp.js';
 import './admin.js';
+import './summary.js';
 export {};

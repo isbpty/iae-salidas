@@ -11,7 +11,10 @@ document.addEventListener('DOMContentLoaded', () => {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && e.target.id === 'waInput') { e.preventDefault(); sendChat(); }
     if (e.key === 'Escape' && UI.modal) { UI.modal = null; renderModal(); }
+    else if (e.key === 'Escape' && UI.view === 'tv') { UI.view = 'school'; render(); }
   });
+  initTheme();
+  setInterval(animateBuses, 500);
   tickClock();
   setInterval(tickClock, 15000);
   boot();
@@ -20,12 +23,27 @@ function tickClock() {
   const d = new Date();
   const el = document.getElementById('clock');
   if (el) el.textContent = d.toLocaleDateString('es-PA', { weekday: 'short', day: 'numeric', month: 'short' }) + ' · ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  const tv = document.getElementById('tvClock');
+  if (tv) tv.textContent = pad(d.getHours()) + ':' + pad(d.getMinutes());
+}
+/* ---------- Tema claro / oscuro ---------- */
+function applyTheme(t) {
+  document.documentElement.dataset.theme = t;
+  try { localStorage.setItem('iae_theme', t); } catch { /* sin almacenamiento */ }
+  const b = document.getElementById('themeBtn'); if (b) { b.textContent = t === 'dark' ? '☀️' : '🌙'; b.title = t === 'dark' ? 'Modo claro' : 'Modo oscuro'; }
+}
+function initTheme() {
+  let t = null;
+  try { t = localStorage.getItem('iae_theme'); } catch { /* sin almacenamiento */ }
+  if (!t) t = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  applyTheme(t);
 }
 
 /* ---------- Render principal ---------- */
 let pendingTimer = null;
 function render() {
   if (!V) return;
+  document.body.classList.toggle('tv-mode', UI.view === 'tv');
   const main = document.getElementById('main');
   const active = document.activeElement;
   const keep = active && active.id === 'waInput' ? { id: 'waInput', value: active.value } : null;
@@ -35,7 +53,7 @@ function render() {
     main.innerHTML = '<div class="pane">' + viewWhatsapp() + '</div><div class="pane">' + viewSchool() + '</div>';
   } else {
     main.className = 'single ' + UI.view;
-    main.innerHTML = { parents: viewParents, whatsapp: viewWhatsapp, school: viewSchool, log: viewLog }[UI.view]();
+    main.innerHTML = { parents: viewParents, whatsapp: viewWhatsapp, school: viewSchool, log: viewLog, tv: viewTv }[UI.view]();
   }
   renderModal();
   drawQRs();
@@ -57,7 +75,8 @@ function currentScreen() {
 function renderTabs() {
   const all = [['parents', '📱 App Padres'], ['whatsapp', '💬 WhatsApp'], ['school', '🏫 Escuela'], ['log', '📜 Bitácora']];
   const allowed = ME.role === 'parent' ? ['parents', 'whatsapp'] : ME.role === 'admin' ? ['whatsapp', 'school', 'log'] : ['school'];
-  if (!allowed.includes(UI.view)) UI.view = allowed[0];
+  if (UI.view === 'tv' && !(ME.role === 'admin' || staffCan('marcar_salida'))) UI.view = allowed[0];
+  if (!allowed.includes(UI.view) && UI.view !== 'tv') UI.view = allowed[0];
   document.getElementById('tabs').innerHTML = all.filter(([k]) => allowed.includes(k)).map(([k, l]) => '<button class="tab' + (UI.view === k ? ' active' : '') + '" data-action="setView" data-view="' + k + '">' + l + '</button>').join('');
 }
 function badge(status) { return '<span class="badge st-' + status + '">' + (STATUS[status] || status) + '</span>'; }
@@ -279,7 +298,8 @@ function schoolHome(staff) {
   markReadSoon();
   return '<h2>Hola, ' + esc(staff.name) + '</h2><div class="kpis">' + kpi('Salidas pendientes', pend.length, 'warn') + kpi('Aprobadas hoy', aprob.length, 'ok') + kpi('Retirados hoy', ret.length) + kpi('Excusas pendientes', exc.length, 'warn') + '</div>' +
     '<div class="cols"><div><h3>Requieren acción</h3>' + (pend.length || exc.length ? pend.concat(exc).map((r) => schoolReqCard(r, staff)).join('') : '<div class="empty">Todo al día ✅</div>') + '</div>' +
-    '<div><h3>Avisos recientes</h3>' + (notifs.length ? notifs.map((n) => '<div class="card notif"><div class="small muted">' + fmtTs(n.ts) + '</div>' + esc(n.text) + '</div>').join('') : '<div class="empty">Sin avisos.</div>') + '</div></div>';
+    '<div>' + (staffCan('ver_solicitudes') ? '<div class="card summary-card"><div class="row"><div class="grow"><b>📊 Resumen del día</b><div class="small muted">Salidas, excusas, tiempos y quién retiró más. Se puede enviar a Dirección.</div></div><button class="btn small primary" data-action="daySummary">Ver resumen</button></div></div>' : '') +
+    '<h3>Avisos recientes</h3>' + (notifs.length ? notifs.map((n) => '<div class="card notif"><div class="small muted">' + fmtTs(n.ts) + '</div>' + esc(n.text) + '</div>').join('') : '<div class="empty">Sin avisos.</div>') + '</div></div>';
 }
 function schoolReqCard(r, staff) {
   const st = student(r.studentId);
@@ -340,8 +360,28 @@ function schoolGate(staff) {
       '<div class="small">📍 ' + esc(r.pickupPoint) + ' · código <b class="mono">' + r.code + '</b>' + (conf ? ' · confirmación: <b>' + conf + '</b>' : '') + (r.status === 'retirado' ? ' · <b>salió ' + fmtClock(r.exitAt) + '</b>' : '') + '</div>' +
       '<div class="actions">' + act + '</div></div></div>';
   };
-  return '<h2>Garita · salidas de hoy <span class="muted small">' + new Date().toLocaleDateString('es-PA', { weekday: 'long', day: 'numeric', month: 'long' }) + '</span> <button class="btn small primary right" data-action="openModal" data-modal="scan">📷 Escanear QR / código</button></h2><h3>Por retirar (' + pend.length + ')</h3>' + (pend.length ? pend.map(card).join('') : '<div class="empty">No hay salidas aprobadas pendientes.</div>') +
+  return '<h2>Garita · salidas de hoy <span class="muted small">' + new Date().toLocaleDateString('es-PA', { weekday: 'long', day: 'numeric', month: 'long' }) + '</span> <span class="right"><button class="btn small" data-action="setView" data-view="tv" title="Pantalla grande para el monitor de la puerta">📺 Pantalla de garita</button> <button class="btn small primary" data-action="openModal" data-modal="scan">📷 Escanear QR / código</button></span></h2><h3>Por retirar (' + pend.length + ')</h3>' + (pend.length ? pend.map(card).join('') : '<div class="empty">No hay salidas aprobadas pendientes.</div>') +
     '<h3>Retirados (' + done.length + ')</h3>' + (done.length ? done.map(card).join('') : '<div class="empty">Nadie ha salido todavía.</div>');
+}
+/* Modo pantalla: para un monitor en la garita. Tarjetas grandes, foto del autorizado, reloj; se actualiza solo. */
+function viewTv() {
+  const t = todayISO();
+  const list = V.requests.filter((r) => r.kind === 'salida' && r.date === t && ['aprobada', 'retirado'].includes(r.status)).sort((a, b) => a.time.localeCompare(b.time));
+  const pend = list.filter((r) => r.status === 'aprobada'); const done = list.filter((r) => r.status === 'retirado').reverse();
+  const card = (r) => {
+    const st = student(r.studentId); const pk = person(r.pickupBy) || {}; const conf = r.confirmation && r.confirmation.status;
+    const soon = Math.abs(minutesOf(r.time) - minutesOf(nowHHMM())) <= 15;
+    return '<div class="tv-card' + (r.pickupKind === 'una_vez' ? ' once' : '') + (soon ? ' soon' : '') + '"><div class="tv-time">' + fmtTime(r.time) + (soon ? '<span class="tv-soon">ahora</span>' : '') + '</div>' +
+      '<div class="tv-doc">' + (pk.docAttachmentId ? '<img src="/api/attachments/' + esc(pk.docAttachmentId) + '" alt="">' : '<div class="tv-nodoc">🪪</div>') + '</div>' +
+      '<div class="tv-body"><div class="tv-student">' + st.emoji + ' ' + esc(st.name) + ' <span class="muted">' + esc(st.grade) + '</span></div>' +
+      '<div class="tv-pick">Retira <b>' + esc(pk.name) + '</b> · ' + esc(pk.relation || '') + ' · céd. <span class="mono">' + esc(pk.cedula || '') + '</span> ' + kindBadge(r.pickupKind) + '</div>' +
+      '<div class="tv-meta">📍 ' + esc(r.pickupPoint) + ' · código <b class="mono">' + r.code + '</b>' + (conf ? ' · confirmación: <b>' + conf + '</b>' : r.pickupKind === 'una_vez' ? ' · <span class="danger-text">requiere confirmación del titular</span>' : '') + '</div></div></div>';
+  };
+  const d = new Date();
+  return '<div class="tv"><header class="tv-head"><div><div class="tv-title">🛂 Garita · ' + esc(V.settings.school.name) + '</div><div class="tv-date">' + (function () { const f = d.toLocaleDateString('es-PA', { weekday: 'long', day: 'numeric', month: 'long' }); return f.charAt(0).toUpperCase() + f.slice(1); })() + '</div></div>' +
+    '<div class="tv-clock" id="tvClock">' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + '</div><button class="btn" data-action="setView" data-view="school">✕ Salir (Esc)</button></header>' +
+    '<section><h2>Por retirar <span class="tv-count">' + pend.length + '</span></h2>' + (pend.length ? '<div class="tv-grid">' + pend.map(card).join('') + '</div>' : '<div class="tv-empty">Sin salidas pendientes ✅</div>') + '</section>' +
+    (done.length ? '<section class="tv-done"><h2>Retirados hoy <span class="tv-count">' + done.length + '</span></h2><div class="tv-list">' + done.slice(0, 8).map((r) => { const st = student(r.studentId); const pk = person(r.pickupBy) || {}; return '<div>' + fmtClock(r.exitAt) + ' · <b>' + esc(st.name) + '</b> · ' + esc(pk.name) + '</div>'; }).join('') + '</div></section>' : '') + '</div>';
 }
 function schoolExcusas(staff) {
   const list = V.requests.filter((r) => r.kind === 'excusa');
@@ -424,6 +464,18 @@ function personDoc(p) {
 function qrBox(r) {
   return '<div class="qr-box"><div class="qrc" data-qr="IAE-' + r.code + '-' + r.id + '"></div><div><div class="small muted">Código de retiro</div><div class="qr-code">' + r.code + '</div><div class="small muted">Muéstralo en garita o dilo en voz alta</div></div></div>';
 }
+/* El servidor manda la posición y la velocidad (progreso por ms); entre sondeos el bus avanza solo. */
+const MAP_ANIMS = new Map(); let MAP_SEQ = 0;
+function animateBuses() {
+  for (const [id, a] of MAP_ANIMS) {
+    const el = document.getElementById(id);
+    if (!el) { MAP_ANIMS.delete(id); continue; }
+    let p = a.base + a.rate * (Date.now() - a.at);
+    p = a.simulated ? p % 1 : Math.min(1, p);
+    const pos = busPosition(a.r, a.leg, p);
+    el.style.transform = 'translate(' + a.X(pos.lng) + 'px,' + a.Y(pos.lat) + 'px)';
+  }
+}
 function routeMap(r, leg, progress, opts = {}) {
   const stops = legStops(r, leg); const W = 600; const H = opts.height || 180;
   const lats = r.stops.map((s) => s.lat); const lngs = r.stops.map((s) => s.lng);
@@ -437,7 +489,10 @@ function routeMap(r, leg, progress, opts = {}) {
   let bus = '';
   if (progress != null) {
     const p = busPosition(r, leg, progress);
-    bus = '<circle cx="' + X(p.lng) + '" cy="' + Y(p.lat) + '" r="15" fill="#fff" stroke="' + r.color + '" stroke-width="3"/><text x="' + X(p.lng) + '" y="' + (Y(p.lat) + 6) + '" font-size="16" text-anchor="middle">🚌</text>';
+    const gps = (V.gpsNow || {})[r.id] || {};
+    const id = 'bus_' + (++MAP_SEQ);
+    MAP_ANIMS.set(id, { r, leg, base: progress, rate: gps.rate || 0, simulated: !!gps.simulated, at: Date.now(), X, Y });
+    bus = '<g class="bus-marker" id="' + id + '" style="transform:translate(' + X(p.lng) + 'px,' + Y(p.lat) + 'px)"><circle class="bus-pulse" r="22" fill="' + r.color + '"/><circle r="15" fill="#fff" stroke="' + r.color + '" stroke-width="3"/><text y="6" font-size="16" text-anchor="middle">🚌</text></g>';
   }
   return '<svg class="map" viewBox="0 0 ' + W + ' ' + H + '" xmlns="http://www.w3.org/2000/svg"><rect width="' + W + '" height="' + H + '" fill="#eef3ee"/>' + grid +
     '<polyline points="' + pts + '" fill="none" stroke="' + r.color + '" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" opacity=".75"/>' +
@@ -485,7 +540,7 @@ function renderModal() {
   const box = document.getElementById('modal');
   if (!UI.modal) { box.className = 'modal hidden'; box.innerHTML = ''; T.modal(null); return; }
   const m = UI.modal;
-  const content = { newSalida: modalSalida, newExcusa: modalExcusa, newAuth: modalAuth, reject: modalReject, guide: modalGuide, where: modalWhere, scan: modalScan, doc: modalDoc }[m.type](m.data || {});
+  const content = { newSalida: modalSalida, newExcusa: modalExcusa, newAuth: modalAuth, reject: modalReject, guide: modalGuide, where: modalWhere, scan: modalScan, doc: modalDoc, daySummary: modalDaySummary }[m.type](m.data || {});
   box.className = 'modal';
   box.innerHTML = '<div class="modal-card"><button class="modal-x" data-action="closeModal">✕</button>' + content + '</div>';
   T.modal(m.type);
@@ -567,6 +622,20 @@ function modalDoc(d) {
     (p.docAttachmentId ? '<img class="doc-big" src="/api/attachments/' + esc(p.docAttachmentId) + '">' : '<div class="empty">Documento registrado: <b>' + esc(p.docName || '—') + '</b><br><span class="small">(dato de ejemplo sin imagen; los autorizados nuevos guardan la foto real)</span></div>') +
     '<div class="actions"><button class="btn primary" data-action="closeModal">Cerrar</button></div>';
 }
+function modalDaySummary(d) {
+  const s = d.result;
+  if (!s) return '<h3>📊 Resumen del día</h3><div class="empty">Calculando…</div>';
+  const row = (k, v) => '<tr><td>' + k + '</td><td><b>' + v + '</b></td></tr>';
+  const min = (v) => (v == null ? 'sin datos' : v + ' min');
+  return '<h3>📊 Resumen del día · ' + esc(fmtDate(s.date)) + '</h3>' +
+    '<div class="kpis">' + kpi('salidas pedidas', s.salidas.pedidas) + kpi('aprobadas', s.salidas.aprobadas, 'ok') + kpi('retiradas', s.salidas.retiradas) + kpi('pendientes', s.salidas.pendientes, s.salidas.pendientes ? 'warn' : '') + '</div>' +
+    '<table class="tbl">' + row('Auto-aprobadas', s.salidas.autoAprobadas) + row('Rechazadas / canceladas', s.salidas.rechazadas + ' / ' + s.salidas.canceladas) + row('Con confirmación de titular (una vez)', s.salidas.conConfirmacion) +
+    row('Excusas recibidas · aceptadas · pendientes', s.excusas.recibidas + ' · ' + s.excusas.aceptadas + ' · ' + s.excusas.pendientes) + row('Por WhatsApp · por la app', s.canales.whatsapp + ' · ' + s.canales.app) +
+    row('Aprobación manual promedio', min(s.tiempos.aprobacionPromedioMin)) + row('De aprobada a retirada', min(s.tiempos.retiroPromedioMin)) +
+    (s.horaPico ? row('Hora pico', s.horaPico.hora + ' (' + s.horaPico.salidas + ' salidas)') : '') + row('Retiró más', s.topRetira.length ? esc(s.topRetira.map((x) => x.name + ' (' + x.count + ')').join(', ')) : '—') + '</table>' +
+    '<pre class="summary-text">' + esc(s.text) + '</pre>' +
+    '<div class="actions"><button class="btn primary" data-action="sendDaySummary">📲 Enviar a Dirección</button><button class="btn" data-action="closeModal">Cerrar</button></div>';
+}
 function modalGuide() {
   return '<h3>📖 Guion sugerido para el demo</h3><ol class="guide">' +
     '<li><b>WhatsApp · Carlos (papá):</b> toca el chip "Necesito retirar a Joseph hoy a las …" (2 h de anticipación). Confirma con <i>Sí</i>. Como cumple la regla, se <b>auto-aprueba</b>: llega el punto de retiro y el código a Carlos y a Ana.</li>' +
@@ -611,6 +680,12 @@ const ACTIONS = {
     run('seed_load', { students: n }).then((c) => { if (c) toast('Cargados ' + c.students + ' estudiantes en ' + c.families + ' familias', 'ok'); });
   },
   showGuide() { UI.modal = { type: 'guide' }; },
+  toggleTheme() { applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'); },
+  daySummary() {
+    UI.modal = { type: 'daySummary', data: {} };
+    apply('day_summary', {}).then((r) => { if (UI.modal && UI.modal.type === 'daySummary') { UI.modal.data.result = r; renderModal(); } }).catch(() => { UI.modal = null; renderModal(); });
+  },
+  sendDaySummary() { run('send_day_summary', {}, 'Resumen enviado a Dirección (avisos de Administración)').then((r) => { if (r) { UI.modal = null; render(); } }); },
   closeModal() { UI.modal = null; },
   openModal(el) { UI.modal = { type: el.dataset.modal, data: { id: el.dataset.id } }; },
   parentTab(el) { UI.parentTab = el.dataset.tab; },
