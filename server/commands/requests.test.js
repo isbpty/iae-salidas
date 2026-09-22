@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeTestApp } from '../test-helpers.js';
-import { listNotifications, getConversation, listAudit, getRequest } from '../db/repo.js';
+import { listNotifications, getConversation, listAudit, getRequest, listRequests, patchRow } from '../db/repo.js';
 
 const texts = async (db, target) => (await listNotifications(db, target)).map((n) => n.text);
 
@@ -113,5 +113,51 @@ test('input validation', async () => {
   await assert.rejects(t.run('create_salida', 'u_p1', { studentId: 'e1', date: '18/09/2026', time: '13:00', pickupBy: 'p1', reason: 'x' }), /invalid_date/);
   await assert.rejects(t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '1pm', pickupBy: 'p1', reason: 'x' }), /invalid_time/);
   await assert.rejects(t.run('create_salida', 'u_p1', { studentId: 'nope', date: '2026-09-18', time: '13:00', pickupBy: 'p1', reason: 'x' }), /student_not_found/);
+  await t.close();
+});
+
+test('date and time must be real calendar values, not just the right shape', async () => {
+  const t = await makeTestApp();
+  await assert.rejects(t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-13-45', time: '13:00', pickupBy: 'p1', reason: 'x' }), /invalid_date/);
+  await assert.rejects(t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-31', time: '13:00', pickupBy: 'p1', reason: 'x' }), /invalid_date/, 'September has 30 days: no rolling into October');
+  await assert.rejects(t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '29:99', pickupBy: 'p1', reason: 'x' }), /invalid_time/);
+  await assert.rejects(t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '13:60', pickupBy: 'p1', reason: 'x' }), /invalid_time/);
+  await t.close();
+});
+
+test('a salida cannot be created in the past; an excusa can', async () => {
+  const t = await makeTestApp();
+  await assert.rejects(t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-01', time: '13:00', pickupBy: 'p1', reason: 'x' }), /date_in_past/);
+  await assert.rejects(t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '09:00', pickupBy: 'p1', reason: 'x' }), /time_in_past/, 'today at 09:00, but now is 10:30');
+  const { result: e } = await t.run('create_excusa', 'u_p1', { studentId: 'e1', date: '2026-09-01', excusaType: 'ausencia', reason: 'x' });
+  assert.equal(e.status, 'pendiente', 'excusas have no past restriction');
+  await t.close();
+});
+
+test('pickupBy must be a real pickup candidate, and rejection tells no one', async () => {
+  const t = await makeTestApp();
+  const before = (await listNotifications(t.db, { personId: 'p7' })).length;
+  await assert.rejects(t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '13:00', pickupBy: 'p7', reason: 'x' }), /pickup_not_candidate/, 'p7 is Wei Chen, another family entirely');
+  assert.equal((await listNotifications(t.db, { personId: 'p7' })).length, before, 'Wei never hears about it');
+  assert.equal((await listRequests(t.db, { studentIds: ['e1'] })).length, 0, 'nothing was created');
+  await assert.rejects(t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '13:00', pickupBy: 'nobody', reason: 'x' }), /pickup_not_candidate/);
+  await t.close();
+});
+
+test('approveRequest revalidates who retrieves: revoked eligibility and a missing person both fail cleanly', async () => {
+  const t = await makeTestApp();
+  const { result: r } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '13:00', pickupBy: 'p5', reason: 'x' });
+  assert.equal(r.status, 'pendiente', 'one-time authorizations need manual review');
+  await t.run('revoke_authorization', 'u_p1', { authorizationId: 'a4' });
+  await assert.rejects(t.run('approve_request', 'u_s2', { requestId: r.id }), (e) => e.status === 409 && e.code === 'pickup_no_longer_eligible');
+
+  const { result: r2 } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '13:00', pickupBy: 'p1', reason: 'y' });
+  assert.equal(r2.status, 'aprobada', 'a titular with enough notice auto-approves');
+  const { result: r3 } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '11:00', pickupBy: 'p1', reason: 'z' });
+  assert.equal(r3.status, 'pendiente', 'short notice needs Recepción');
+  /* Simulate a stale row (legacy data, or a person deleted since): approveRequest must never throw a
+     TypeError reading properties off a null person. */
+  await t.db.tx((q) => patchRow(q, 'requests', r3.id, { pickupBy: 'nobody' }));
+  await assert.rejects(t.run('approve_request', 'u_s2', { requestId: r3.id }), (e) => e.status === 409 && e.code === 'pickup_person_missing');
   await t.close();
 });

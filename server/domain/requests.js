@@ -2,10 +2,10 @@ import { uid } from './ids.js';
 import { HttpError, notFound, conflict, badRequest } from './errors.js';
 import { insertRequest, getRequest, patchRow, addRequestEvent, getStudent, getPerson, getStaff, listRequests, upsertConfirmation, setConversation, getConversation, clearConversation } from '../db/repo.js';
 import { notifyPerson, notifyRole, notifyTeachers, logEvent } from './notifications.js';
-import { pickupEligibility } from './eligibility.js';
+import { pickupEligibility, pickupCandidates } from './eligibility.js';
 import { evaluateAutoApprove } from './autoapprove.js';
 import { fmtDate, fmtTime, firstName, CHANNEL, roleName } from './text.js';
-import { nowHHMM } from './time.js';
+import { nowHHMM, todayISO, isValidDate, isValidTime } from './time.js';
 
 export function describePickup(req, pk) {
   if (!pk) return '';
@@ -30,15 +30,19 @@ export async function createRequest(ctx, data) {
   if (!st) notFound('student_not_found');
   const by = await getPerson(ctx.q, data.requestedBy);
   if (!by) notFound('person_not_found');
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(data.date || '')) badRequest('invalid_date');
+  if (!isValidDate(data.date)) badRequest('invalid_date');
   const req = { id: uid('r'), kind: data.kind, studentId: st.id, requestedBy: by.id, date: data.date, reason: String(data.reason || ''), channel: data.channel === 'whatsapp' ? 'whatsapp' : 'web', status: 'pendiente', createdAt: ctx.now, autoApproved: false };
   if (req.kind === 'salida') {
-    if (!/^\d{2}:\d{2}$/.test(data.time || '')) badRequest('invalid_time');
+    if (!isValidTime(data.time)) badRequest('invalid_time');
     req.time = data.time;
+    const today = todayISO(ctx.now, ctx.tz);
+    if (req.date < today) badRequest('date_in_past');
+    if (req.date === today && req.time < nowHHMM(ctx.now, ctx.tz)) badRequest('time_in_past');
     req.pickupBy = data.pickupBy || by.id;
+    const candidate = (await pickupCandidates(ctx, st.id)).find((c) => c.person.id === req.pickupBy);
+    if (!candidate) badRequest('pickup_not_candidate');
     req.code = await uniqueCode(ctx, req.date);
-    const el = await pickupEligibility(ctx, st.id, req.pickupBy);
-    req.pickupKind = el.kind || 'no_autorizado';
+    req.pickupKind = candidate.kind;
   } else if (req.kind === 'excusa') {
     req.excusaType = data.excusaType === 'tardanza' ? 'tardanza' : 'ausencia';
     req.attachmentId = data.attachmentId || null;
@@ -77,6 +81,9 @@ export async function approveRequest(ctx, id, opts = {}) {
   if (req.kind !== 'salida' || req.status !== 'pendiente') conflict('request_not_pending');
   const st = await getStudent(ctx.q, req.studentId);
   const pk = await getPerson(ctx.q, req.pickupBy);
+  if (!pk) conflict('pickup_person_missing');
+  const el = await pickupEligibility(ctx, req.studentId, req.pickupBy);
+  if (!el.ok) conflict('pickup_no_longer_eligible');
   const staff = opts.auto ? null : await getStaff(ctx.q, opts.by);
   const pickupPoint = opts.pickupPoint || ctx.settings.defaultPickupPoint;
   await patchRow(ctx.q, 'requests', id, { status: 'aprobada', pickupPoint, decidedAt: ctx.now, autoApproved: !!opts.auto, decidedBy: opts.auto ? 'auto' : opts.by });
@@ -92,7 +99,6 @@ export async function approveRequest(ctx, id, opts = {}) {
   }
   if (needsConfirm) await hist(ctx, req, 'Requiere confirmación del titular cuando la persona llegue a la garita');
   // Aviso proactivo: solo cuando retira una persona nueva o con autorización temporal / de una vez
-  const el = await pickupEligibility(ctx, req.studentId, req.pickupBy);
   const ageDays = el.auth ? Math.floor((ctx.now.getTime() - el.auth.createdAt) / 86400000) : null;
   const unusual = el.kind === 'temporal' || el.kind === 'una_vez' || (el.auth && ageDays < ctx.settings.newAuthDays);
   if (unusual) {

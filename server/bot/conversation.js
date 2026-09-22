@@ -7,6 +7,20 @@ import { notifyPerson, notifyRole, logEvent } from '../domain/notifications.js';
 import { addRequestEvent } from '../db/repo.js';
 import { fmtDate, fmtTime, firstName, STATUS, LEG_NAMES } from '../domain/text.js';
 import { todayISO, shiftISO } from '../domain/time.js';
+import { HttpError } from '../domain/errors.js';
+
+/* Friendly Spanish replies for the validation errors `createRequest` can throw. The bot already steers
+   the conversation away from most of these (it only offers times/candidates it considers valid), but a
+   draft can go stale between messages (e.g. an authorization gets revoked while the parent is still
+   typing), so `createRequest` can still reject it. Without this, the error would bubble out of
+   `handleIncoming` as a bare command failure instead of a chat message. */
+const CREATE_REQUEST_ERRORS = {
+  date_in_past: 'Esa fecha ya pasó. Escríbeme de nuevo con una fecha desde hoy en adelante.',
+  time_in_past: 'Esa hora ya pasó hoy. Escríbeme de nuevo con una hora que no haya pasado.',
+  invalid_date: 'No reconocí esa fecha. Intenta de nuevo, por ejemplo "mañana" o "25/09".',
+  invalid_time: 'No reconocí esa hora. Intenta de nuevo, por ejemplo "3:30 pm".',
+  pickup_not_candidate: 'Esa persona ya no aparece como autorizada para retirar. Regístrala en la app o elige a alguien más.',
+};
 
 const reply = (ctx, key, text, buttons = null, extra = {}) => ctx.transport.send(ctx, key, { text, buttons, location: extra.location || null, typing: true });
 const setState = (ctx, key, state) => setConversation(ctx.q, key, state, ctx.now);
@@ -193,7 +207,14 @@ async function handleStep(ctx, key, p, kids, st, n, raw) {
     if (/^(si|sí|s|yes|correcto|ok|dale|confirmo)\b/.test(n)) {
       await clearState(ctx, key);
       const { pickupHint, attachment, ...data } = d;
-      await createRequest(ctx, { ...data, attachmentName: attachment || null });
+      try {
+        await createRequest(ctx, { ...data, attachmentName: attachment || null });
+      } catch (e) {
+        if (e instanceof HttpError && e.status === 400) {
+          return reply(ctx, key, '⚠️ ' + (CREATE_REQUEST_ERRORS[e.code] || 'No pude crear la solicitud, intenta de nuevo.') + '\n\n' + botMenu(ctx, p, kids));
+        }
+        throw e;
+      }
       return;
     }
     if (/^(no|n)\b/.test(n)) { await clearState(ctx, key); return reply(ctx, key, 'Ok, la descarté. Escríbeme de nuevo con los datos correctos, por ejemplo: "Necesito retirar a ' + firstName(kids[0].name) + ' hoy a las 3:30 pm".'); }

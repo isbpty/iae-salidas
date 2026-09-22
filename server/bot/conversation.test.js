@@ -130,3 +130,27 @@ test('proactive alert answered NO cancels; confirm_pickup answered through chat'
   assert.equal((await listRequests(t.db, { studentIds: ['e1'] }))[0].confirmation.status, 'confirmada');
   await t.close();
 });
+
+test('validation errors from create_salida reach the parent as a chat reply, not a crash', async () => {
+  const t = await makeTestApp();
+  await say(t, 'u_p1', 'Necesito retirar a Joseph hoy a las 8 am');
+  assert.match((await lastBot(t.db, 'p1')).text, /• Hora: 8:00 am/);
+  await say(t, 'u_p1', 'Sí');
+  const m = await lastBot(t.db, 'p1');
+  assert.match(m.text, /hora ya pasó/i);
+  assert.equal((await listRequests(t.db, { studentIds: ['e1'] })).length, 0, 'nothing was created');
+  assert.equal(await getConversation(t.db, 'p1'), null, 'the bot does not get stuck');
+  await t.close();
+});
+
+test('a candidate who loses eligibility between drafting and confirming gets a friendly reply', async () => {
+  const t = await makeTestApp();
+  await say(t, 'u_p1', 'A Joseph lo retira la abuela a las 11');
+  assert.match((await lastBot(t.db, 'p1')).text, /• Retira: María Pérez \(Abuela\)/);
+  await t.run('revoke_authorization', 'u_p1', { authorizationId: 'a1' });
+  await say(t, 'u_p1', 'Sí');
+  const m = await lastBot(t.db, 'p1');
+  assert.match(m.text, /ya no|no aparece|no está autorizad/i);
+  assert.equal((await listRequests(t.db, { studentIds: ['e1'] })).length, 0, 'nothing was created');
+  await t.close();
+});

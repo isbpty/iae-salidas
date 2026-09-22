@@ -35,3 +35,17 @@ export function localToMs(dateISO, hhmm, tz) {
   return guess - offsetMinutes(guess, tz) * 60000;
 }
 export function weekdayOf(dateISO) { return new Date(dateISO + 'T00:00:00Z').getUTCDay(); }
+
+/* Strict `YYYY-MM-DD` check: round-trips through `Date` so overflowing days (`2026-09-31` → Oct 1) or
+   months (`2026-13-45`) are rejected instead of silently rolling into a different, valid-looking date. */
+export function isValidDate(iso) {
+  if (typeof iso !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return false;
+  const d = new Date(iso + 'T00:00:00Z');
+  if (Number.isNaN(d.getTime())) return false;
+  return d.toISOString().slice(0, 10) === iso;
+}
+export function isValidTime(hhmm) {
+  if (typeof hhmm !== 'string' || !/^\d{2}:\d{2}$/.test(hhmm)) return false;
+  const [h, m] = hhmm.split(':').map(Number);
+  return h >= 0 && h <= 23 && m >= 0 && m <= 59;
+}
