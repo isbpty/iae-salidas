@@ -1,5 +1,7 @@
 import test from 'node:test';
+import { mock } from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import { makeTestApp } from '../test-helpers.js';
 import { listNotifications, getConversation, listAudit, getRequest, listRequests, patchRow } from '../db/repo.js';
 
@@ -159,5 +161,48 @@ test('approveRequest revalidates who retrieves: revoked eligibility and a missin
      TypeError reading properties off a null person. */
   await t.db.tx((q) => patchRow(q, 'requests', r3.id, { pickupBy: 'nobody' }));
   await assert.rejects(t.run('approve_request', 'u_s2', { requestId: r3.id }), (e) => e.status === 409 && e.code === 'pickup_person_missing');
+  await t.close();
+});
+
+test('eligibility follows the date of the salida, not today: a temporal window outside the requested date is rejected at creation', async () => {
+  const t = await makeTestApp();
+  // a3: p4 has a temporal authorization for e1, 2026-09-16..2026-09-30.
+  await assert.rejects(t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-10-15', time: '13:00', pickupBy: 'p4', reason: 'x' }), /pickup_not_candidate/, 'October 15 is long past the temporal window');
+  await t.close();
+});
+
+test('a temporal authorization that starts tomorrow makes tomorrow\'s salida auto-approvable today, but not today\'s', async () => {
+  const t = await makeTestApp();
+  await t.run('add_authorization', 'u_p2', { studentIds: ['e1'], mode: 'cuenta', personId: 'p7', type: 'temporal', from: '2026-09-19', to: '2026-10-03' });
+  await assert.rejects(t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '13:00', pickupBy: 'p7', reason: 'x' }), /pickup_not_candidate/, 'the window has not started yet');
+  const { result: r } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-19', time: '09:00', pickupBy: 'p7', reason: 'x' });
+  assert.equal(r.status, 'aprobada', 'tomorrow the window is open, so it auto-approves today');
+  assert.equal(r.pickupKind, 'temporal');
+  await t.close();
+});
+
+test('approveRequest rejects a salida whose date is already in the past', async () => {
+  const t = await makeTestApp();
+  const { result: r } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '11:00', pickupBy: 'p1', reason: 'short notice' });
+  assert.equal(r.status, 'pendiente', 'short notice needs Recepción');
+  t.clock.now = new Date('2026-09-19T15:00:00Z'); // next day: nobody ever decided on it
+  await assert.rejects(t.run('approve_request', 'u_s2', { requestId: r.id }), (e) => e.status === 409 && e.code === 'date_in_past');
+  await t.close();
+});
+
+test('pickup codes use crypto.randomInt and the DB enforces one code per date for salidas', async () => {
+  const t = await makeTestApp();
+  const spy = mock.method(crypto, 'randomInt');
+  const { result: r1 } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '13:00', pickupBy: 'p1', reason: 'x' });
+  assert.ok(spy.mock.calls.length > 0, 'crypto.randomInt was used to generate the code');
+  assert.match(r1.code, /^\d{4}$/);
+  spy.mock.restore();
+  const { result: r2 } = await t.run('create_salida', 'u_p1', { studentId: 'e2', date: '2026-09-18', time: '13:00', pickupBy: 'p1', reason: 'y' });
+  assert.notEqual(r1.code, r2.code, 'two salidas the same day never share a code');
+  // Migration 004: the unique index rejects a duplicate (date, code) for salidas at the DB level.
+  await assert.rejects(
+    t.db.query("INSERT INTO requests(id, kind, student_id, requested_by, date, time, channel, status, code, created_at) VALUES ('rz_dup','salida','e1','p1','2026-09-18','16:00','web','pendiente',$1,$2)", [r1.code, new Date().toISOString()]),
+    (e) => e.code === '23505',
+  );
   await t.close();
 });

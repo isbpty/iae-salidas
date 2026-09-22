@@ -30,9 +30,9 @@ function botMenu(ctx, p, kids) {
   const k = firstName(kids[0].name);
   return 'Hola ' + firstName(p.name) + ' 👋 Soy el asistente de ' + ctx.settings.school.short + ' Salidas.\n\nPuedo ayudarte con:\n1️⃣ Salida temprana: "Necesito retirar a ' + k + ' hoy a las 3:30 pm"\n2️⃣ Alguien más retira: "A ' + k + ' lo retira la abuela a las 2 pm"\n3️⃣ Excusa: "' + k + ' no irá mañana, tiene cita médica"\n4️⃣ Ubicación: "¿Dónde está ' + k + '?"\n5️⃣ Bus: "' + k + ' hoy no va en el bus"\n6️⃣ Escribe *estado* para ver tus solicitudes.';
 }
-async function resolvePickup(ctx, hint, studentId, requesterId) {
+async function resolvePickup(ctx, hint, studentId, requesterId, date) {
   if (!hint || hint === 'yo') return requesterId;
-  const cands = await pickupCandidates(ctx, studentId);
+  const cands = await pickupCandidates(ctx, studentId, date);
   const words = hint.split(' ');
   let hit = cands.find((c) => words.some((w) => w.length > 2 && normalize(c.person.name).split(' ').includes(w)));
   if (hit) return hit.person.id;
@@ -91,16 +91,16 @@ async function continueSalida(ctx, key, p, kids, st) {
   const kid = await getStudent(ctx.q, d.studentId);
   if (!d.time) { await setState(ctx, key, { step: 'ask_time', draft: d }); return reply(ctx, key, '¿A qué hora necesitas que ' + firstName(kid.name) + ' salga ' + fmtDate(ctx, d.date) + '? (ej. 3:30 pm)'); }
   if (d.pickupBy === undefined || d.pickupBy === null) {
-    const pid = await resolvePickup(ctx, d.pickupHint, d.studentId, p.id);
+    const pid = await resolvePickup(ctx, d.pickupHint, d.studentId, p.id, d.date);
     if (!pid) {
       await setState(ctx, key, { step: 'ask_pickup', draft: d });
-      return reply(ctx, key, '"' + d.pickupHint + '" no aparece como persona autorizada para ' + firstName(kid.name) + '. Puedes registrarla en la app. ¿Quién va a retirar?', candidateLabels(await pickupCandidates(ctx, d.studentId), p));
+      return reply(ctx, key, '"' + d.pickupHint + '" no aparece como persona autorizada para ' + firstName(kid.name) + '. Puedes registrarla en la app. ¿Quién va a retirar?', candidateLabels(await pickupCandidates(ctx, d.studentId, d.date), p));
     }
     d.pickupBy = pid;
   }
   await setState(ctx, key, { step: 'confirm', draft: d });
   const pk = await getPerson(ctx.q, d.pickupBy);
-  const el = await pickupEligibility(ctx, d.studentId, d.pickupBy);
+  const el = await pickupEligibility(ctx, d.studentId, d.pickupBy, d.date);
   return reply(ctx, key, '📋 Confirma la solicitud:\n• Estudiante: ' + kid.name + ' (' + kid.grade + ')\n• Fecha: ' + fmtDate(ctx, d.date) + '\n• Hora: ' + fmtTime(d.time) + '\n• Retira: ' + (pk.id === p.id ? 'tú' : pk.name + ' (' + pk.relation + ')') + (el.kind === 'una_vez' ? ' · autorización de una sola vez' : '') + '\n\n¿Es correcto?', ['Sí', 'No']);
 }
 async function startExcusa(ctx, key, p, kids, n, raw) {
@@ -197,8 +197,8 @@ async function handleStep(ctx, key, p, kids, st, n, raw) {
   if (st.step === 'ask_pickup') {
     if (/^(no|nadie|ninguno|ninguna)\b/.test(n)) { await clearState(ctx, key); return reply(ctx, key, 'Ok, descarté la solicitud. Registra a la persona en la app y vuelve a escribirme.'); }
     const hint = /^yo\b/.test(n) ? 'yo' : n.replace(/\(.*\)/, '').trim();
-    const pid = await resolvePickup(ctx, hint, d.studentId, p.id);
-    if (!pid) return reply(ctx, key, 'Esa persona no está autorizada. Elige una de la lista o regístrala en la app.', candidateLabels(await pickupCandidates(ctx, d.studentId), p));
+    const pid = await resolvePickup(ctx, hint, d.studentId, p.id, d.date);
+    if (!pid) return reply(ctx, key, 'Esa persona no está autorizada. Elige una de la lista o regístrala en la app.', candidateLabels(await pickupCandidates(ctx, d.studentId, d.date), p));
     d.pickupBy = pid;
     return cont();
   }

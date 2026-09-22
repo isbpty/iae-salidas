@@ -48,7 +48,38 @@ test('a denied confirmation blocks the exit; confirmation is not offered for ord
   await t.close();
 });
 
-test('scan_code finds today approved salidas only and logs the scan', async () => {
+test('pickupKind is recalculated, not frozen: a titular pickup re-authorized as una_vez after approval still needs confirmation and can be delivered', async () => {
+  const t = await makeTestApp();
+  const { result: r } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '13:00', pickupBy: 'p3', reason: 'x' });
+  assert.equal(r.status, 'aprobada');
+  assert.equal(r.pickupKind, 'siempre', 'a1: grandma is authorized "siempre"');
+  await t.run('revoke_authorization', 'u_p1', { authorizationId: 'a1' });
+  await t.run('add_authorization', 'u_p1', { studentIds: ['e1'], mode: 'cuenta', personId: 'p3', type: 'una_vez' });
+  /* Before the fix, request_confirmation checked the frozen req.pickupKind ('siempre') and
+     refused with confirmation_not_needed, and mark_exit then refused with confirmation_required:
+     nobody could ever release the student. */
+  const { result: c } = await t.run('request_confirmation', 'u_s6', { requestId: r.id });
+  assert.equal(c.confirmation.status, 'pendiente');
+  await t.run('confirm_pickup', 'u_p1', { requestId: r.id, confirmed: true });
+  const { result: done } = await t.run('mark_exit', 'u_s6', { requestId: r.id });
+  assert.equal(done.status, 'retirado');
+  await t.close();
+});
+
+test('mark_exit only works for today; an approved salida from another day shows as vencida in the views', async () => {
+  const t = await makeTestApp();
+  const { result: r } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '13:00', pickupBy: 'p1', reason: 'x' });
+  assert.equal(r.status, 'aprobada');
+  t.clock.now = new Date('2026-09-19T15:00:00Z'); // next day, garita never scanned the code
+  await assert.rejects(t.run('mark_exit', 'u_s6', { requestId: r.id }), (e) => e.code === 'not_today');
+  const view = await t.view('u_p1');
+  const found = view.requests.find((x) => x.id === r.id);
+  assert.equal(found.status, 'aprobada', 'the DB status is not changed');
+  assert.equal(found.expired, true, 'but it is shown as vencida');
+  await t.close();
+});
+
+test("scan_code finds today's approved salidas only and logs the scan", async () => {
   const t = await makeTestApp();
   const { result: r } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '13:00', pickupBy: 'p1', reason: 'x' });
   const { result: found } = await t.run('scan_code', 'u_s6', { code: ' ' + r.code + ' ' });

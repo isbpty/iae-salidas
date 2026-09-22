@@ -1,5 +1,6 @@
 import { listPersons, listAuthorizations, listRequests, listNotifications, listChat, getConversation, listRoutes, listTripsOn, listStaff } from '../db/repo.js';
 import { studentsOf, authorizedFor, todayOf } from '../domain/eligibility.js';
+import { withExpired } from '../domain/requests.js';
 
 export const publicPerson = ({ id, name, phone, cedula, relation, hasAccount, docName, docAttachmentId }) => ({ id, name, phone, cedula, relation, hasAccount, docName, docAttachmentId });
 /* What a parent may know about somebody outside their own family: enough to name them in a list,
@@ -13,7 +14,7 @@ export async function parentView(ctx) {
   const all = await listPersons(ctx.q);
   const byId = Object.fromEntries(all.map((p) => [p.id, p]));
   const authorizations = await listAuthorizations(ctx.q, { studentIds: ids, includeRevoked: false });
-  const requests = await listRequests(ctx.q, { studentIds: ids });
+  const requests = withExpired(await listRequests(ctx.q, { studentIds: ids }), todayOf(ctx));
   const wanted = new Set([me.id]);
   for (const s of students) for (const t of s.titulares) wanted.add(t);
   for (const a of authorizations) { wanted.add(a.personId); if (a.createdBy) wanted.add(a.createdBy); }

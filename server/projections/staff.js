@@ -1,5 +1,6 @@
 import { listStudents, listPersons, listAuthorizations, listRequests, listNotifications, listStaff, listRoutes, listTripsOn, listAudit, listUsers, listAllChats, listConversations } from '../db/repo.js';
 import { todayOf } from '../domain/eligibility.js';
+import { withExpired } from '../domain/requests.js';
 import { publicPerson } from './parent.js';
 
 const can = (ctx, cap) => ctx.user.role === 'admin' || !!(ctx.permissions[ctx.user.role] || {})[cap];
@@ -28,6 +29,7 @@ export async function staffView(ctx) {
     }
     authorizations = can(ctx, 'gestionar_autorizados') || can(ctx, 'ver_estudiantes') ? await listAuthorizations(ctx.q, { studentIds: ids }) : [];
   }
+  requests = withExpired(requests, today);
   const all = await listPersons(ctx.q);
   const byId = Object.fromEntries(all.map((p) => [p.id, p]));
   const persons = {};

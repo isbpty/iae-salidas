@@ -6,27 +6,34 @@ const route = (id) => (V.routes || []).find((r) => r.id === id) || null;
 const staffName = (id) => (V.staffNames || {})[id] || '';
 const levelName = (id) => ((V.levels || []).find((l) => l.id === id) || {}).name || id;
 function studentsOf(personId) { return (V.students || []).filter((s) => (s.titulares || []).includes(personId)); }
-function isAuthActive(a) {
-  const t = todayISO();
+/* `date` defaults to "hoy" but a caller building the salida form must pass the date actually
+   being requested: a temporal or una_vez authorization is only valid for its own window, which
+   may not include today (mirrors server/domain/eligibility.js). */
+function isAuthActive(a, date) {
+  const t = date || todayISO();
   if (a.revokedAt) return false;
   if (a.type === 'siempre') return true;
   if (a.type === 'temporal') return a.validFrom <= t && t <= a.validTo;
-  if (a.type === 'una_vez') return !a.usedAt;
+  if (a.type === 'una_vez') {
+    if (a.usedAt) return false;
+    const validTo = a.validTo || (a.createdAt ? addDaysISO(a.createdAt, 7) : null);
+    return !validTo || t <= validTo;
+  }
   return false;
 }
 function authsForStudent(sid) { return (V.authorizations || []).filter((a) => a.studentId === sid && !a.revokedAt); }
 function authorizedFor() { return V.authorizedFor || []; }
-function pickupEligibility(studentId, personId) {
+function pickupEligibility(studentId, personId, date) {
   const st = student(studentId);
   if (!st || !personId) return { ok: false };
   if (st.titulares.includes(personId)) return { ok: true, kind: 'titular' };
-  const a = (V.authorizations || []).find((x) => x.studentId === studentId && x.personId === personId && isAuthActive(x));
+  const a = (V.authorizations || []).find((x) => x.studentId === studentId && x.personId === personId && isAuthActive(x, date));
   return a ? { ok: true, kind: a.type, auth: a } : { ok: false };
 }
-function pickupCandidates(studentId) {
+function pickupCandidates(studentId, date) {
   const st = student(studentId);
   const list = st.titulares.map((id) => ({ person: person(id), kind: 'titular' }));
-  authsForStudent(studentId).filter(isAuthActive).forEach((a) => list.push({ person: person(a.personId), kind: a.type, auth: a }));
+  authsForStudent(studentId).filter((a) => isAuthActive(a, date)).forEach((a) => list.push({ person: person(a.personId), kind: a.type, auth: a }));
   return list.filter((c) => c.person);
 }
 function staffCan(cap) { return !!(V.capabilities || {})[cap]; }

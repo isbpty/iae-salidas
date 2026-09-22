@@ -11,6 +11,9 @@ export async function addAuthorization(ctx, { studentIds, personId, newPerson, a
     if (!/^\d{4}-\d{2}-\d{2}$/.test(from || '') || !/^\d{4}-\d{2}-\d{2}$/.test(to || '')) badRequest('invalid_date_range');
     if (to < from) badRequest('invalid_date_range');
   }
+  /* una_vez may optionally carry its own expiry date; when omitted, pickupEligibility defaults it
+     to 7 days after created_at (see domain/eligibility.js). */
+  if (type === 'una_vez' && to && !/^\d{4}-\d{2}-\d{2}$/.test(to)) badRequest('invalid_date_range');
   let att = null;
   if (attachmentId) { att = await getAttachment(ctx.q, attachmentId); if (!att) notFound('attachment_not_found'); }
   let pid = personId;
@@ -34,7 +37,7 @@ export async function addAuthorization(ctx, { studentIds, personId, newPerson, a
     if (!st) notFound('student_not_found');
     if (st.titulares.includes(pid)) continue; // ya es titular
     names.push(firstName(st.name));
-    const a = { id: uid('a'), studentId: sid, personId: pid, type, createdBy: creator.personId || null, createdAt: ctx.now, validFrom: type === 'temporal' ? from : null, validTo: type === 'temporal' ? to : null };
+    const a = { id: uid('a'), studentId: sid, personId: pid, type, createdBy: creator.personId || null, createdAt: ctx.now, validFrom: type === 'temporal' ? from : null, validTo: type === 'temporal' ? to : (type === 'una_vez' ? (to || null) : null) };
     await insertRow(ctx.q, 'authorizations', a);
     created.push(await getAuthorization(ctx.q, a.id));
     await logEvent(ctx, 'Autorizó a ' + p.name + ' (' + p.relation + ') para retirar a ' + st.name + ' · ' + AUTH_TYPES[type], creator.name);

@@ -99,7 +99,7 @@ function renderTabs() {
   if (!allowed.includes(UI.view) && UI.view !== 'tv') UI.view = allowed[0];
   document.getElementById('tabs').innerHTML = all.filter(([k]) => allowed.includes(k)).map(([k, l]) => '<button class="tab' + (UI.view === k ? ' active' : '') + '" data-action="setView" data-view="' + k + '">' + l + '</button>').join('');
 }
-function badge(status) { return '<span class="badge st-' + status + '">' + (STATUS[status] || status) + '</span>'; }
+function badge(status, expired) { return expired ? '<span class="badge st-cancelada">Vencida</span>' : '<span class="badge st-' + status + '">' + (STATUS[status] || status) + '</span>'; }
 function kindBadge(kind) {
   const map = { titular: 'k-titular', siempre: 'k-siempre', temporal: 'k-temporal', una_vez: 'k-unavez' };
   return '<span class="badge ' + (map[kind] || '') + '">' + esc(kindLabel(kind)) + '</span>';
@@ -202,7 +202,7 @@ function requestCard(r, o = {}) {
     main = '<b>📝 Excusa · ' + esc(r.excusaType) + ' · ' + esc(fmtDate(r.date)) + '</b><div class="small">' + esc(r.reason) + '</div>' + (r.attachmentName ? '<div class="small">📎 ' + esc(r.attachmentName) + '</div>' : '') +
       (r.status === 'rechazada' ? '<div class="small danger-text">Motivo: ' + esc(r.rejectReason) + '</div>' : '');
   }
-  return '<div class="card req"><div class="row top"><span class="avatar sm">' + st.emoji + '</span><div class="grow"><div class="small muted">' + esc(st.name) + ' · ' + esc(st.grade) + ' · vía ' + CHANNEL[r.channel] + ' · por ' + esc(firstName(by.name)) + '</div>' + main + '</div>' + badge(r.status) + '</div>' +
+  return '<div class="card req"><div class="row top"><span class="avatar sm">' + st.emoji + '</span><div class="grow"><div class="small muted">' + esc(st.name) + ' · ' + esc(st.grade) + ' · vía ' + CHANNEL[r.channel] + ' · por ' + esc(firstName(by.name)) + '</div>' + main + '</div>' + badge(r.status, r.expired) + '</div>' +
     (o.compact ? '' : '<details class="hist"><summary>Historial</summary>' + r.history.map((h) => '<div class="small"><span class="muted mono">' + fmtTs(h.ts) + '</span> ' + esc(h.text) + '</div>').join('') + '</details>') +
     (canCancel ? '<div class="actions"><button class="btn tiny" data-action="cancelReq" data-id="' + r.id + '">Cancelar solicitud</button></div>' : '') +
     '</div>';
@@ -347,7 +347,7 @@ function schoolReqCard(r, staff) {
       actions = '<div class="actions"><button class="btn small primary" data-action="acceptExcusa" data-id="' + r.id + '">✅ Aceptar</button><button class="btn small danger" data-action="openModal" data-modal="reject" data-id="' + r.id + '">✕ Rechazar</button></div>';
     }
   }
-  return '<div class="card req"><div class="row top"><span class="avatar sm">' + st.emoji + '</span><div class="grow"><div class="small muted">' + esc(st.name) + ' · ' + esc(st.grade) + ' ' + esc(levelName(st.levelId)) + ' · vía ' + CHANNEL[r.channel] + ' · solicitó ' + esc(by.name) + ' (' + esc(by.relation) + ') · ' + fmtTs(r.createdAt) + '</div>' + body + '</div>' + badge(r.status) + '</div>' +
+  return '<div class="card req"><div class="row top"><span class="avatar sm">' + st.emoji + '</span><div class="grow"><div class="small muted">' + esc(st.name) + ' · ' + esc(st.grade) + ' ' + esc(levelName(st.levelId)) + ' · vía ' + CHANNEL[r.channel] + ' · solicitó ' + esc(by.name) + ' (' + esc(by.relation) + ') · ' + fmtTs(r.createdAt) + '</div>' + body + '</div>' + badge(r.status, r.expired) + '</div>' +
     '<details class="hist"><summary>Historial</summary>' + r.history.map((h) => '<div class="small"><span class="muted mono">' + fmtTs(h.ts) + '</span> ' + esc(h.text) + '</div>').join('') + '</details>' + actions + '</div>';
 }
 function schoolRequests(staff) {
@@ -578,11 +578,12 @@ function modalSalida(d) {
   const p = V.me;
   const kids = studentsOf(p.id);
   const sid = d.studentId || kids[0].id;
-  const cands = pickupCandidates(sid);
+  const date = d.date || todayISO();
+  const cands = pickupCandidates(sid, date);
   const defTime = addMinutes(nowHHMM(), 120);
   return '<h3>🚪 Solicitar salida temprana</h3><form data-form="newSalida" class="form">' +
     '<label>Estudiante <select name="studentId" data-change="modalField">' + kids.map((k) => opt(k.id, k.name + ' · ' + k.grade, k.id === sid)).join('') + '</select></label>' +
-    '<div class="grid2"><label>Fecha <input type="date" name="date" value="' + (d.date || todayISO()) + '" min="' + todayISO() + '" required></label><label>Hora <input type="time" name="time" value="' + (d.time || defTime) + '" required></label></div>' +
+    '<div class="grid2"><label>Fecha <input type="date" name="date" value="' + date + '" min="' + todayISO() + '" required data-change="modalField"></label><label>Hora <input type="time" name="time" value="' + (d.time || defTime) + '" required></label></div>' +
     '<label>¿Quién retira? <select name="pickupBy">' + cands.map((c) => opt(c.person.id, (c.person.id === p.id ? 'Yo · ' : '') + c.person.name + ' (' + c.person.relation + ') · ' + kindLabel(c.kind), c.person.id === (d.pickupBy || p.id))).join('') + '</select></label>' +
     '<label>Motivo <input name="reason" value="' + esc(d.reason || '') + '" placeholder="Cita médica, viaje, etc." required></label>' +
     '<p class="small muted">Si cumples la regla de auto-aprobación (titular, anticipación ≥ ' + V.settings.minAnticipationMin + ' min, persona autorizada vigente) se aprueba al instante.</p>' +
@@ -632,7 +633,7 @@ function modalWhere(d) {
 function modalScan(d) {
   if (d.found) {
     const r = request(d.found); const st = student(r.studentId); const pk = person(r.pickupBy) || {};
-    const el = pickupEligibility(r.studentId, r.pickupBy);
+    const el = pickupEligibility(r.studentId, r.pickupBy, r.date);
     return '<h3>✅ Código válido · ' + r.code + '</h3><div class="row" style="align-items:flex-start; gap:14px">' +
       (pk.docAttachmentId ? '<img class="doc-big" style="max-width:220px; margin:0" src="/api/attachments/' + esc(pk.docAttachmentId) + '">' : '<div class="doc-placeholder" style="width:120px;height:120px;font-size:13px">🪪<br>' + esc(pk.docName || 'sin foto') + '</div>') +
       '<div><div style="font-size:18px"><b>' + esc(pk.name) + '</b> <span class="muted">(' + esc(pk.relation) + ')</span></div><div>Cédula: <b class="mono">' + esc(pk.cedula) + '</b> · ' + kindBadge(el.kind || r.pickupKind) + '</div>' +

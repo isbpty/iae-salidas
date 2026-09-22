@@ -86,4 +86,10 @@ CREATE INDEX IF NOT EXISTS activity_sid_at ON activity_events(sid, at);
 CREATE INDEX IF NOT EXISTS activity_kind_name_at ON activity_events(kind, name, at);
 `,
   },
+  {
+    version: '004_requests_code_unique',
+    sql: `
+CREATE UNIQUE INDEX IF NOT EXISTS requests_date_code ON requests(date, code) WHERE kind='salida' AND code IS NOT NULL;
+`,
+  },
 ];

@@ -1,8 +1,9 @@
+import crypto from 'node:crypto';
 import { uid } from './ids.js';
 import { HttpError, notFound, conflict, badRequest } from './errors.js';
 import { insertRequest, getRequest, patchRow, addRequestEvent, getStudent, getPerson, getStaff, listRequests, upsertConfirmation, setConversation, getConversation, clearConversation } from '../db/repo.js';
 import { notifyPerson, notifyRole, notifyTeachers, logEvent } from './notifications.js';
-import { pickupEligibility, pickupCandidates } from './eligibility.js';
+import { pickupEligibility, pickupCandidates, todayOf } from './eligibility.js';
 import { evaluateAutoApprove } from './autoapprove.js';
 import { fmtDate, fmtTime, firstName, CHANNEL, roleName } from './text.js';
 import { nowHHMM, todayISO, isValidDate, isValidTime } from './time.js';
@@ -12,9 +13,32 @@ export function describePickup(req, pk) {
   return pk.name + (req.pickupBy === req.requestedBy ? ' (solicitante)' : ' (' + pk.relation + ')');
 }
 const hist = (ctx, req, text) => addRequestEvent(ctx.q, req.id, ctx.now, text);
+const randomCode = () => String(crypto.randomInt(1000, 10000));
 async function uniqueCode(ctx, date) {
   const used = new Set((await listRequests(ctx.q, { date, kind: 'salida' })).map((r) => r.code));
-  for (;;) { const c = String(1000 + Math.floor(Math.random() * 9000)); if (!used.has(c)) return c; }
+  let c = randomCode();
+  while (used.has(c)) c = randomCode();
+  return c;
+}
+/* Migration 004 adds a unique index on requests(date, code) for salidas. The SELECT above avoids
+   the common case, but two concurrent create_salida calls for the same date can still race between
+   that read and their own insert; if that happens, Postgres/PGlite reject the second insert with
+   23505 and we simply draw a fresh code and try again instead of surfacing a 500. */
+export async function insertSalidaRequest(ctx, req) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await insertRequest(ctx.q, req);
+      return;
+    } catch (e) {
+      if (req.kind === 'salida' && e && e.code === '23505' && attempt < 5) { req.code = randomCode(); continue; }
+      throw e;
+    }
+  }
+}
+/* Derived, display-only flag: an `aprobada` salida whose date has already passed (garita never
+   scanned it) is shown as "vencida" without ever touching the stored status. */
+export function withExpired(requests, today) {
+  return requests.map((r) => ({ ...r, expired: r.kind === 'salida' && r.status === 'aprobada' && r.date < today }));
 }
 async function loadSalida(ctx, id) {
   /* Lock the row for the rest of the transaction so two garita officers cannot both read
@@ -39,7 +63,7 @@ export async function createRequest(ctx, data) {
     if (req.date < today) badRequest('date_in_past');
     if (req.date === today && req.time < nowHHMM(ctx.now, ctx.tz)) badRequest('time_in_past');
     req.pickupBy = data.pickupBy || by.id;
-    const candidate = (await pickupCandidates(ctx, st.id)).find((c) => c.person.id === req.pickupBy);
+    const candidate = (await pickupCandidates(ctx, st.id, req.date)).find((c) => c.person.id === req.pickupBy);
     if (!candidate) badRequest('pickup_not_candidate');
     req.code = await uniqueCode(ctx, req.date);
     req.pickupKind = candidate.kind;
@@ -48,7 +72,7 @@ export async function createRequest(ctx, data) {
     req.attachmentId = data.attachmentId || null;
     req.attachmentName = data.attachmentName || null;
   } else badRequest('invalid_kind');
-  await insertRequest(ctx.q, req);
+  await insertSalidaRequest(ctx, req);
   const ch = CHANNEL[req.channel];
   const others = st.titulares.filter((t) => t !== by.id);
   if (req.kind === 'salida') {
@@ -79,18 +103,21 @@ export async function createRequest(ctx, data) {
 export async function approveRequest(ctx, id, opts = {}) {
   const req = await loadSalida(ctx, id);
   if (req.kind !== 'salida' || req.status !== 'pendiente') conflict('request_not_pending');
+  if (req.date < todayOf(ctx)) conflict('date_in_past');
   const st = await getStudent(ctx.q, req.studentId);
   const pk = await getPerson(ctx.q, req.pickupBy);
   if (!pk) conflict('pickup_person_missing');
-  const el = await pickupEligibility(ctx, req.studentId, req.pickupBy);
+  const el = await pickupEligibility(ctx, req.studentId, req.pickupBy, req.date);
   if (!el.ok) conflict('pickup_no_longer_eligible');
   const staff = opts.auto ? null : await getStaff(ctx.q, opts.by);
   const pickupPoint = opts.pickupPoint || ctx.settings.defaultPickupPoint;
-  await patchRow(ctx.q, 'requests', id, { status: 'aprobada', pickupPoint, decidedAt: ctx.now, autoApproved: !!opts.auto, decidedBy: opts.auto ? 'auto' : opts.by });
+  /* Recalculate pickupKind instead of trusting the value frozen at creation: eligibility may have
+     changed (a new authorization, a revocation) between create_salida and this approval. */
+  await patchRow(ctx.q, 'requests', id, { status: 'aprobada', pickupPoint, pickupKind: el.kind, decidedAt: ctx.now, autoApproved: !!opts.auto, decidedBy: opts.auto ? 'auto' : opts.by });
   const who = opts.auto ? 'Aprobada automáticamente (regla: titular, anticipación, autorizado vigente)' : 'Aprobada por ' + staff.name;
   await hist(ctx, req, who + ' · ' + pickupPoint);
   await logEvent(ctx, (opts.auto ? 'Auto-aprobó' : 'Aprobó') + ' salida de ' + st.name + ' · ' + pickupPoint, opts.auto ? 'Sistema' : staff.name);
-  const needsConfirm = req.pickupKind === 'una_vez';
+  const needsConfirm = el.kind === 'una_vez';
   const msg = '✅ Salida aprobada: ' + st.name + ' ' + fmtDate(ctx, req.date) + ' a las ' + fmtTime(req.time) + '. Retira: ' + describePickup(req, pk) +
     '. Punto de retiro: ' + pickupPoint + '. Código: ' + req.code + '.' + (needsConfirm ? ' ⚠️ Te pediremos confirmar cuando la persona llegue a la garita.' : '');
   for (const t of st.titulares) await notifyPerson(ctx, t, msg);
@@ -157,7 +184,10 @@ export async function cancelRequest(ctx, id, personId) {
 export async function requestConfirmation(ctx, id, byStaffId) {
   const req = await loadSalida(ctx, id);
   if (req.kind !== 'salida' || req.status !== 'aprobada') conflict('request_not_approved');
-  if (req.pickupKind !== 'una_vez') conflict('confirmation_not_needed');
+  /* Use the current eligibility, not the pickupKind frozen at approval: it may have changed since
+     (a revocation followed by a new una_vez authorization, for instance). */
+  const current = await pickupEligibility(ctx, req.studentId, req.pickupBy, req.date);
+  if (current.kind !== 'una_vez') conflict('confirmation_not_needed');
   const st = await getStudent(ctx.q, req.studentId);
   const pk = await getPerson(ctx.q, req.pickupBy);
   const staff = await getStaff(ctx.q, byStaffId);
@@ -193,10 +223,11 @@ export async function confirmPickup(ctx, id, personId, yes) {
 export async function markExit(ctx, id, byStaffId) {
   const req = await loadSalida(ctx, id);
   if (req.kind !== 'salida' || req.status !== 'aprobada') conflict('request_not_approved');
+  if (req.date !== todayOf(ctx)) throw new HttpError(409, 'not_today', 'Esta salida es del ' + fmtDate(ctx, req.date) + ', no se puede marcar el retiro hoy.');
   const st = await getStudent(ctx.q, req.studentId);
   const pk = await getPerson(ctx.q, req.pickupBy);
   const officer = await getStaff(ctx.q, byStaffId);
-  const el = await pickupEligibility(ctx, req.studentId, req.pickupBy);
+  const el = await pickupEligibility(ctx, req.studentId, req.pickupBy, req.date);
   if (!el.ok) throw new HttpError(409, 'pickup_not_authorized', pk.name + ' ya no tiene autorización vigente para ' + st.name + '.');
   if (el.kind === 'una_vez' && !(req.confirmation && req.confirmation.status === 'confirmada')) {
     throw new HttpError(409, 'confirmation_required', 'Autorización de una sola vez: primero solicita la confirmación del titular.');
