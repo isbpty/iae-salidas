@@ -6,14 +6,19 @@ export function loadConfig(env = process.env) {
   const serverless = env.VERCEL === '1';
   const databaseUrl = env.DATABASE_URL || null;
   if (serverless && !databaseUrl) throw new Error('DATABASE_URL_required_on_vercel');
+  const superKey = env.SUPER_KEY || '';
+  if (superKey && superKey.length < 24) throw new Error('SUPER_KEY_min_24_chars');
   return {
     secret,
     pin,
     /* The shared pilot PIN is OFF by default (every real person has a tester PIN); PILOT_PIN_SHARED=true turns it on
        for local development, the load test and the very first create_testers. */
     sharedPin: env.PILOT_PIN_SHARED === 'true',
-    /* Second key for the separate super admin page (/super). Empty = that page cannot be opened. */
-    superKey: env.SUPER_KEY || '',
+    /* Second key for the separate super admin page (/super). Empty = that page cannot be opened; set = 24+ chars. */
+    superKey,
+    /* Demo mode (ON unless DEMO_MODE=false): reset_demo, seed_load and writing on another person's WhatsApp
+       chat (the simulator) only exist in demo mode. Turn it off before loading real data. */
+    demoMode: env.DEMO_MODE !== 'false',
     databaseUrl,
     dataDir: env.PGLITE_DIR || 'data/pglite',
     port: Number(env.PORT || 3000),

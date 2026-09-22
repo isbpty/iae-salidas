@@ -11,7 +11,7 @@ import { buildView } from './projections/index.js';
 export const TZ = 'America/Panama';
 /* A 1x1 transparent PNG: the smallest upload the mime allowlist accepts. */
 export const PNG_1x1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
-export const CONFIG = { secret: 's'.repeat(32), pin: '4321', sharedPin: true, superKey: 'clave-super-test', databaseUrl: null, dataDir: null, port: 0, serverless: false, secure: false };
+export const CONFIG = { secret: 's'.repeat(32), pin: '4321', sharedPin: true, superKey: 'clave-super-test-de-24-caracteres', databaseUrl: null, dataDir: null, port: 0, serverless: false, secure: false };
 /* Friday 2026-09-18 10:30 in Panama: school hours, bus not on the road unless simulateBus. */
 export const NOW = new Date('2026-09-18T15:30:00Z');
 
@@ -52,7 +52,7 @@ export async function loginAs(base, userId, pin = '4321') {
 }
 
 /* The /super page: super admin PIN + SUPER_KEY → its own cookie. */
-export async function loginSuper(base, pin, key = 'clave-super-test') {
+export async function loginSuper(base, pin, key = CONFIG.superKey) {
   const r = await call(base, '/api/auth/super', { method: 'POST', body: { pin, key } });
   if (r.status !== 200) throw new Error('super login failed: ' + r.status + ' ' + (r.json && r.json.error));
   return r.headers.get('set-cookie').split(';')[0];

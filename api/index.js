@@ -19,5 +19,9 @@ function getApp() {
 }
 export default async function handler(req, res) {
   try { const app = await getApp(); return await app.handler(req, res); }
-  catch (e) { res.statusCode = 503; res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ error: e.message })); }
+  catch (e) {
+    /* The detail (a pg error may name the Neon host) goes to the log, never to the client. */
+    console.error('api/index: app unavailable', e);
+    res.statusCode = 503; res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ error: 'service_unavailable' }));
+  }
 }

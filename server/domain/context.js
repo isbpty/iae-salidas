@@ -10,6 +10,8 @@ export async function makeCtx(q, deps, userId, extra = {}) {
     q, user, settings, permissions,
     now: typeof deps.now === 'function' ? deps.now() : deps.now, tz: settings.timezone || 'America/Panama',
     transport: deps.transport, gps: deps.gps,
+    /* Server settings a command may need (the PIN pepper, demo mode). Never sent to a client. */
+    config: deps.config || {},
     person: user.kind === 'person' ? await getPerson(q, user.refId) : null,
     staff: user.kind === 'staff' ? await getStaff(q, user.refId) : null,
     ...extra,

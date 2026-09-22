@@ -39,7 +39,6 @@ export async function parentView(ctx) {
     me: publicPerson(me),
     students,
     persons,
-    accounts: all.filter((p) => p.hasAccount && p.id !== me.id).map(({ id, name, relation }) => ({ id, name, relation })),
     authorizations,
     authorizedFor: forOthers.map((x) => ({ auth: x.auth, createdByName: (byId[x.auth.createdBy] || {}).name || null, student: { id: x.student.id, name: x.student.name, grade: x.student.grade, emoji: x.student.emoji } })),
     requests,

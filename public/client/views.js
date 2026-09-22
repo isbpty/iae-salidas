@@ -599,6 +599,15 @@ function modalExcusa(d) {
     '<label>Adjuntar certificado / foto (opcional) <input type="file" name="attachment" accept="image/*,.pdf"></label>' +
     '<div class="actions"><button class="btn primary" type="submit">Enviar excusa</button><button class="btn" type="button" data-action="closeModal">Cancelar</button></div></form>';
 }
+/* "Padre/madre que ya tiene cuenta": no hay directorio; se busca por cédula o teléfono completos (lookup_person). */
+function authLookupFields(d) {
+  const found = d.found
+    ? '<div class="row item"><span class="avatar sm">🧑</span><div><b>' + esc(d.found.name) + '</b> <span class="muted small">' + esc(d.found.relation) + ' · 📱 tiene cuenta</span></div><input type="hidden" name="personId" value="' + esc(d.found.id) + '"></div>'
+    : d.lookupError ? '<p class="small danger-text">' + esc(d.lookupError) + '</p>'
+      : '<p class="small muted">Escribe la cédula o el teléfono completos de la persona y pulsa Buscar.</p>';
+  return '<div class="grid2"><label>Cédula <input name="lookupCedula" placeholder="8-123-456" value="' + esc(d.lookupCedula || '') + '"></label><label>Teléfono <input name="lookupPhone" placeholder="+507 6xxx-xxxx" value="' + esc(d.lookupPhone || '') + '"></label></div>' +
+    '<div class="actions"><button class="btn small" type="button" data-action="lookupPerson">🔎 Buscar</button></div>' + found;
+}
 function modalAuth(d) {
   const p = V.me;
   const kids = studentsOf(p.id);
@@ -609,7 +618,7 @@ function modalAuth(d) {
     '<div class="label">Persona</div><div class="radios"><label class="check"><input type="radio" name="mode" value="nueva" data-change="modalField"' + (mode === 'nueva' ? ' checked' : '') + '> Nueva persona (sin cuenta)</label><label class="check"><input type="radio" name="mode" value="cuenta" data-change="modalField"' + (mode === 'cuenta' ? ' checked' : '') + '> Padre/madre que ya tiene cuenta</label></div>' +
     (mode === 'nueva'
       ? '<div class="grid2"><label>Nombre completo <input name="name" required value="' + esc(d.name || '') + '"></label><label>Parentesco <input name="relation" required placeholder="Abuela, Tío, Chofer…" value="' + esc(d.relation || '') + '"></label><label>Cédula <input name="cedula" required placeholder="8-123-456" value="' + esc(d.cedula || '') + '"></label><label>Teléfono <input name="phone" placeholder="+507 6xxx-xxxx" value="' + esc(d.phone || '') + '"></label></div>'
-      : '<label>Cuenta <select name="personId">' + V.accounts.map((a) => opt(a.id, a.name + ' · ' + a.relation, a.id === d.personId)).join('') + '</select></label>') +
+      : authLookupFields(d)) +
     '<label>Foto de la persona o de su cédula' + (mode === 'nueva' ? ' (obligatoria)' : ' (opcional, ya tiene cuenta)') + ' <input type="file" name="docFile" accept="image/*"' + (mode === 'nueva' ? ' required' : '') + '></label>' +
     '<p class="small muted">La garita verá esta imagen junto al código de retiro para verificar la identidad.</p>' +
     '<label>Tipo de autorización <select name="type" data-change="modalField">' + Object.keys(AUTH_TYPES).map((k) => opt(k, AUTH_TYPES[k], k === type)).join('') + '</select></label>' +
@@ -673,7 +682,7 @@ function modalGuide() {
     '<li><b>Escuela · Garita (Manuel):</b> en "Garita · Hoy" verifica la cédula y marca <b>retirado</b>. Ambos padres reciben "Joseph fue retirado a las …".</li>' +
     '<li><b>Autorización de una sola vez:</b> Carlos envía "Hoy retira a Joseph Laura Gómez a las …". Recepción aprueba. En Garita, pulsa <b>solicitar confirmación</b>: Carlos y Ana reciben "¿Confirmas?". Responde <i>Sí, confirmo</i> desde WhatsApp y luego marca retirado. Laura (que tiene cuenta) también ve la autorización en su app.</li>' +
     '<li><b>Excusa:</b> "Sofía no irá mañana, tiene cita médica" → adjunta certificado → Recepción acepta → la profesora de Kínder lo ve en su bandeja.</li>' +
-    '<li><b>App Padres:</b> muestra hijos, solicitudes, autorizados (siempre / por tiempo / una vez), y agrega un autorizado nuevo o un padre con cuenta.</li>' +
+    '<li><b>App Padres:</b> muestra hijos, solicitudes, autorizados (siempre / por tiempo / una vez), y agrega un autorizado nuevo o un padre con cuenta (se busca por su cédula o teléfono completos).</li>' +
     '<li><b>Permisos:</b> en otro dispositivo inicia sesión como Prof. Diana Ríos (solo ve 3°) y luego como Administración para editar la matriz de permisos y la regla de auto-aprobación.</li>' +
     '<li><b>Bus:</b> en WhatsApp escribe "¿Dónde está Joseph?": responde con el bus, la próxima parada, el tiempo de llegada y el mapa GPS (simulado). Después de marcarlo retirado en garita, la misma pregunta responde "salió por Puerta Principal a las …, confirmó el oficial …".</li>' +
     '<li><b>Monitora:</b> inicia sesión como Kenia Pérez (solo ve el Bus 12), marca Abordó / Bajó / No abordó e inicia o finaliza el viaje. Escribe "Sofía hoy no va en el bus" desde WhatsApp y mira cómo le llega a la monitora.</li>' +
@@ -717,6 +726,18 @@ const ACTIONS = {
   },
   sendDaySummary() { run('send_day_summary', {}, 'Resumen enviado a Dirección (avisos de Administración)').then((r) => { if (r) { UI.modal = null; render(); } }); },
   closeModal() { UI.modal = null; },
+  lookupPerson(el) {
+    const form = el.closest('form');
+    const d = formData(form);
+    UI.modal.data = Object.assign({}, UI.modal.data, d, { found: null, lookupError: null });
+    if (!String(d.lookupCedula || '').trim() && !String(d.lookupPhone || '').trim()) { UI.modal.data.lookupError = 'Escribe la cédula o el teléfono.'; return; }
+    api.command('lookup_person', { cedula: d.lookupCedula, phone: d.lookupPhone })
+      .then((r) => { if (UI.modal && UI.modal.type === 'newAuth') { UI.modal.data.found = r.result; renderModal(); } })
+      .catch((e) => {
+        if (e.status === 401) { showLogin(); return; }
+        if (UI.modal && UI.modal.type === 'newAuth') { UI.modal.data.lookupError = e.status === 404 ? 'No encontramos una cuenta con esa cédula o teléfono.' : 'No se pudo buscar: ' + e.message; renderModal(); }
+      });
+  },
   openModal(el) { UI.modal = { type: el.dataset.modal, data: { id: el.dataset.id } }; },
   parentTab(el) { UI.parentTab = el.dataset.tab; },
   schoolTab(el) { UI.schoolTab = el.dataset.tab; },
@@ -787,6 +808,7 @@ const FORMS = {
     if (d.type === 'temporal' && d.to < d.from) { alert('La fecha "hasta" debe ser posterior a "desde".'); return; }
     const file = form.querySelector('input[name=docFile]').files[0] || null;
     if (d.mode === 'nueva' && !file) { alert('Sube una foto de la persona o de su cédula.'); return; }
+    if (d.mode === 'cuenta' && !d.personId) { alert('Busca primero a la persona con su cédula o teléfono.'); return; }
     let attachmentId = null;
     if (file) {
       const up = await run('upload_attachment', await api.filePayload(file, 'cedula'));

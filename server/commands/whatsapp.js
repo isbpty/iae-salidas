@@ -12,6 +12,9 @@ register({
       let chatKey = ctx.person ? ctx.person.id : null;
       if (input.chatKey) {
         if (ctx.user.role !== 'admin' && input.chatKey !== chatKey) deny('forbidden_chat_key');
+        /* Writing on somebody else's chat (the simulator's phone) would let an admin answer "Sí, confirmo"
+           for a titular: demo mode only. */
+        if (input.chatKey !== chatKey && ctx.config.demoMode === false) deny('demo_only');
         if (input.chatKey !== 'unknown' && !(await getPerson(ctx.q, input.chatKey))) notFound('chat_key_not_found');
         chatKey = input.chatKey;
       }

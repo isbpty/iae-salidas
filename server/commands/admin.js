@@ -5,13 +5,15 @@ import { resetAll, seedDemo } from '../db/seed.js';
 import { seedLoad } from '../db/seed-load.js';
 import { logEvent } from '../domain/notifications.js';
 import { roleName } from '../domain/text.js';
-import { badRequest, conflict } from '../domain/errors.js';
+import { badRequest, conflict, deny } from '../domain/errors.js';
 import { createTesters, countTesters } from '../testers.js';
 
 const CAPS = ['ver_solicitudes', 'aprobar', 'ver_excusas', 'decidir_excusas', 'marcar_salida', 'ver_estudiantes', 'gestionar_autorizados', 'ver_rutas', 'marcar_bus', 'personal', 'config', 'bitacora', 'todos_niveles'];
 const ROLES = ['recepcion', 'profesor', 'garita', 'monitora'];
 const HHMM = /^\d{2}:\d{2}$/;
 const clampInt = (v, min, max, dflt) => { const n = Math.round(Number(v)); return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : dflt; };
+/* Wiping everything for everyone only exists in demo mode (DEMO_MODE, on by default). */
+const requireDemo = (ctx) => { if (ctx.config.demoMode === false) deny('demo_only'); };
 
 register({
   update_settings: {
@@ -60,6 +62,7 @@ register({
   reset_demo: {
     roles: ['admin'],
     handler: async (ctx) => {
+      requireDemo(ctx);
       await resetAll(ctx.q);
       const revision = await seedDemo(ctx.q, { now: ctx.now, tz: ctx.tz });
       return { revision };
@@ -69,6 +72,7 @@ register({
   seed_load: {
     roles: ['admin'],
     handler: async (ctx, input) => {
+      requireDemo(ctx);
       const students = clampInt(input.students, 50, 3000, 700);
       const seed = clampInt(input.seed, 1, 1e9, 7);
       await resetAll(ctx.q);
@@ -84,7 +88,7 @@ register({
     roles: ['admin'],
     handler: async (ctx) => {
       if ((await countTesters(ctx.q)) > 0) conflict('testers_exist');
-      const made = await createTesters(ctx.q, ctx.now);
+      const made = await createTesters(ctx.q, ctx.now, ctx.config.secret);
       await logEvent(ctx, 'Creó los ' + made.length + ' probadores del piloto', ctx.staff.name);
       return made;
     },

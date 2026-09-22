@@ -68,7 +68,7 @@ function afterLogin() {
   render();
   if (!subscribed) { subscribed = true; api.subscribe(refresh, V.realtime); }
 }
-const loginErrorText = (err) => (err.status === 429 ? 'Demasiados intentos. Espera 15 minutos.' : err.status === 401 ? 'PIN incorrecto.' : 'Sin conexión. Intenta de nuevo.');
+const loginErrorText = (err) => (err.status === 429 ? 'Demasiados intentos. Espera 15 minutos.' : err.status === 403 ? 'Tu PIN no tiene acceso a ese usuario.' : err.status === 401 ? 'PIN incorrecto.' : 'Sin conexión. Intenta de nuevo.');
 const userOption = (x) => '<option value="' + esc(x.id) + '">' + esc(x.name) + ' · ' + esc(roleName(x.role)) + '</option>';
 /* Login en dos pasos en la misma tarjeta: primero el PIN (dice quién prueba), luego el usuario del demo. */
 async function showLogin() {
@@ -99,15 +99,15 @@ async function showLogin() {
       e.preventDefault();
       const userId = new FormData(e.target).get('userId');
       try { await api.login(userId, { pinToken: r.pinToken }); modal.className = 'modal hidden'; modal.innerHTML = ''; loginShowing = false; boot(); }
-      catch (err) { document.getElementById('loginError').textContent = err.status === 401 ? 'El PIN caducó. Vuelve a escribirlo.' : loginErrorText(err); }
+      catch (err) { if (err.status === 401) { stepPin(); document.getElementById('loginError').textContent = 'El PIN caducó o ya se usó. Vuelve a escribirlo.'; } else document.getElementById('loginError').textContent = loginErrorText(err); }
     };
   };
   stepPin();
 }
-/* Mismo probador, otro usuario del demo: no hace falta el PIN otra vez. */
+/* Mismo probador, otro usuario del demo: no hace falta el PIN otra vez. Solo los usuarios que su PIN permite. */
 async function showSwitch() {
   let options = [];
-  try { options = await api.options(); } catch { toast('Sin conexión', 'error'); return; }
+  try { options = await api.options(); } catch (e) { if (e.status === 401) showLogin(); else toast('Sin conexión', 'error'); return; }
   const modal = document.getElementById('modal');
   UI.modal = null;
   modal.className = 'modal';
@@ -118,7 +118,7 @@ async function showSwitch() {
     e.preventDefault();
     const userId = new FormData(e.target).get('userId');
     try { T.flush(true); await api.switchUser(userId); location.reload(); }
-    catch (err) { toast('No se pudo cambiar: ' + err.message, 'error'); }
+    catch (err) { toast(err.status === 403 ? 'Tu PIN no tiene acceso a ese usuario.' : 'No se pudo cambiar: ' + err.message, 'error'); }
   };
 }
 async function doLogout() { try { T.stop(); await api.logout(); } finally { location.reload(); } }

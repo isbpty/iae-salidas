@@ -96,3 +96,23 @@ test('a parent never rewrites the document of a person who already exists', asyn
   assert.equal(staffed.docName, 'maria_nueva.png');
   await t.close();
 });
+
+test('lookup_person finds an account holder by exact cédula or phone, and nothing else', async () => {
+  const t = await makeTestApp();
+  const byCedula = (await t.run('lookup_person', 'u_p1', { cedula: ' 8-703-789 ' })).result;
+  assert.deepEqual(byCedula, { id: 'p5', name: 'Laura Gómez', relation: 'Mamá' }, 'only id, name and relation');
+  assert.deepEqual((await t.run('lookup_person', 'u_p1', { phone: '+507 6333-3333' })).result, byCedula);
+  assert.deepEqual((await t.run('lookup_person', 'u_p1', { phone: '6333 3333' })).result, byCedula, 'the local number without the country code is the same phone');
+  assert.deepEqual((await t.run('lookup_person', 'u_p1', { cedula: 'e-8-12345' })).result.id, 'p7');
+  await assert.rejects(t.run('lookup_person', 'u_p1', { cedula: '8-703' }), /person_not_found/, 'no partial matches');
+  await assert.rejects(t.run('lookup_person', 'u_p1', { phone: '6333' }), /person_not_found/);
+  await assert.rejects(t.run('lookup_person', 'u_p1', { cedula: '8-200-111' }), /person_not_found/, 'a person without an account is not in the lookup');
+  await assert.rejects(t.run('lookup_person', 'u_p1', {}), /lookup_required/);
+  await assert.rejects(t.run('lookup_person', 'u_s2', { cedula: '8-703-789' }), /forbidden_role/);
+  const err = await t.run('lookup_person', 'u_p1', { cedula: 'nadie' }).catch((e) => e);
+  assert.equal(err.status, 404);
+  /* the found id is what add_authorization (mode cuenta) takes */
+  const { result } = await t.run('add_authorization', 'u_p1', { studentIds: ['e1'], mode: 'cuenta', personId: byCedula.id, type: 'siempre' });
+  assert.equal(result.authorizations[0].personId, 'p5');
+  await t.close();
+});

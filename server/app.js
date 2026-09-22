@@ -3,10 +3,10 @@ import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HttpError } from './domain/errors.js';
 import { randomBytes } from 'node:crypto';
-import { cookieValue, sessionToken, verifySession, pinToken, verifyPinToken, signToken, verifyToken } from './session.js';
-import { constantEquals, loginBlocked, recordLoginFailure, clearLoginFailures } from './auth.js';
+import { cookieValue, sessionToken, verifySession, pinToken, verifyPinToken, signToken, verifyToken, issuedAtMs } from './session.js';
+import { constantEquals, attemptsBlocked, recordLoginFailure, clearLoginFailures, consumeTokenId } from './auth.js';
 import { listUsers, getUser, getRevision, getAttachment, insertAudit, purgeActivity } from './db/repo.js';
-import { findTesterByPin, listTesters, regenerateTesterPin, renameTester } from './testers.js';
+import { findTesterByPin, listTesters, regenerateTesterPin, renameTester, setAllowedUsers, getTester, revokeTesterSessions, testerAccess, allowsUser } from './testers.js';
 import { summary, events as activityEvents, exportCsv } from './activity-queries.js';
 import { classify, maskInput, recordServerEvent, ingestClientEvents } from './activity.js';
 import { runCommand } from './commands/run.js';
@@ -51,20 +51,30 @@ export function createApp(deps) {
     const source = config.serverless ? req.headers['x-forwarded-for'] || direct : direct;
     return String(source).split(',')[0].trim();
   };
+  /* A token of a tester counts while the tester is active and it was issued after their last logout or new PIN
+     (`sessions_valid_after`). Tokens of the shared PIN carry no tester and only expire. */
+  const tokenCurrent = (token, access) => !!access && access.active && issuedAtMs(token) >= access.validAfterMs;
   async function sessionUser(req) {
     const session = verifySession(cookieValue(req.headers.cookie, 'iae_session'), config.secret);
-    if (!session) return null;
+    if (!session || !session.userId) return null;
     const user = await getUser(db, session.userId);
-    return user && user.active ? { user, session } : null;
+    if (!user || !user.active) return null;
+    let access = null;
+    if (session.testerId) {
+      access = await testerAccess(db, session.testerId);
+      if (!tokenCurrent(session, access) || !allowsUser(access, user.id)) return null;
+    }
+    return { user, session, access };
   }
   /* A PIN names a tester, or is the shared pilot PIN (tester null), or is wrong (undefined). */
   async function resolvePin(pin) {
     const value = String(pin == null ? '' : pin);
     if (config.sharedPin && constantEquals(value, config.pin)) return null;
-    return (await findTesterByPin(db, value)) || undefined;
+    return (await findTesterByPin(db, value, config.secret)) || undefined;
   }
   const publicTester = (t) => (t && t.testerId ? { id: t.testerId, name: t.testerName, super: !!t.super } : null);
-  const userOptions = async () => (await listUsers(db)).map((u) => ({ id: u.id, name: u.name, role: u.role }));
+  /* The demo users a tester may open (`allowed_users`, null = all). */
+  const userOptions = async (allowed = null) => (await listUsers(db)).filter((u) => !allowed || allowed.includes(u.id)).map((u) => ({ id: u.id, name: u.name, role: u.role }));
   function startSession(res, user, proof, act, sid = randomBytes(8).toString('hex')) {
     const extra = { testerId: proof.testerId || null, testerName: proof.testerName || null, super: !!proof.super, sid };
     act.session = extra;
@@ -76,67 +86,85 @@ export function createApp(deps) {
   /* ---- Página /super: acceso propio (PIN de super admin + SUPER_KEY) con una cookie aparte de una hora ---- */
   const SUPER_TTL = 3600;
   const superCookie = (token, maxAge) => `iae_super=${token}; HttpOnly; SameSite=Strict; Path=/api; Max-Age=${maxAge}${config.secure ? '; Secure' : ''}`;
-  const superSession = (req) => { const v = verifyToken(cookieValue(req.headers.cookie, 'iae_super'), config.secret); return v && v.kind === 'super' ? v : null; };
+  const superToken = (tester, sid) => signToken({ kind: 'super', testerId: tester.id, testerName: tester.name, sid }, config.secret, SUPER_TTL);
+  async function superSession(req) {
+    const v = verifyToken(cookieValue(req.headers.cookie, 'iae_super'), config.secret);
+    if (!v || v.kind !== 'super') return null;
+    const access = await testerAccess(db, v.testerId);
+    return access && access.super && tokenCurrent(v, access) ? v : null;
+  }
 
   async function api(req, res, path, act, url) {
-    if (path === 'health') return json(res, 200, { ok: true, db: db.kind, revision: await getRevision(db) });
-    if (path === 'auth/options' && req.method === 'GET') return json(res, 200, await userOptions());
+    /* Public health says only that the process answers; revision and database kind need a session. */
+    if (path === 'health') {
+      const known = (await sessionUser(req)) || (await superSession(req));
+      return json(res, 200, known ? { ok: true, db: db.kind, revision: await getRevision(db) } : { ok: true });
+    }
     /* Step one: the PIN alone says who the tester is. Step two picks the demo user with the proof. */
     if (path === 'auth/pin' && req.method === 'POST') {
       const input = await readBody(req);
       const now = deps.now();
-      const keys = ['ip:' + clientIp(req)];
-      if (await loginBlocked(db, keys, now)) return json(res, 429, { error: 'too_many_attempts' });
+      const ipKey = 'pin:' + clientIp(req);
+      if (await attemptsBlocked(db, { ip: ipKey }, now)) return json(res, 429, { error: 'too_many_attempts' });
       const tester = await resolvePin(input.pin);
-      if (tester === undefined) { await recordLoginFailure(db, keys, now); return json(res, 401, { error: 'invalid_credentials' }); }
-      await clearLoginFailures(db, keys);
+      if (tester === undefined) { await recordLoginFailure(db, [ipKey], now); return json(res, 401, { error: 'invalid_credentials' }); }
       act.session = { testerId: tester ? tester.id : null, super: !!(tester && tester.super) };
       const token = pinToken(tester, config.secret);
-      return json(res, 200, { tester: publicTester(verifyPinToken(token, config.secret)), pinToken: token, options: await userOptions() });
+      return json(res, 200, { tester: publicTester(verifyPinToken(token, config.secret)), pinToken: token, options: await userOptions(tester ? tester.allowedUsers : null) });
     }
     if (path === 'auth/login' && req.method === 'POST') {
       const input = await readBody(req);
       const now = deps.now();
-      const keys = ['ip:' + clientIp(req), 'user:' + String(input.userId || '')];
-      if (await loginBlocked(db, keys, now)) return json(res, 429, { error: 'too_many_attempts' });
+      const ipKey = 'login:' + clientIp(req), userKey = 'user:' + String(input.userId || '');
+      if (await attemptsBlocked(db, { ip: ipKey, user: userKey }, now)) return json(res, 429, { error: 'too_many_attempts' });
       const user = input.userId ? await getUser(db, String(input.userId)) : null;
-      let proof = null;
+      let proof = null, token = null;
       if (user && user.active) {
-        if (input.pinToken) proof = verifyPinToken(input.pinToken, config.secret);
+        if (input.pinToken) proof = token = verifyPinToken(input.pinToken, config.secret);
         else { const tester = await resolvePin(input.pin); proof = tester === undefined ? null : { testerId: tester ? tester.id : null, testerName: tester ? tester.name : null, super: !!(tester && tester.super) }; }
       }
-      if (!proof) { await recordLoginFailure(db, keys, now); return json(res, 401, { error: 'invalid_credentials' }); }
-      await clearLoginFailures(db, keys);
+      let access = null;
+      if (proof && proof.testerId) {
+        access = await testerAccess(db, proof.testerId);
+        /* A PIN token issued before a logout or a new PIN no longer proves anything. */
+        if (!access || !access.active || (token && !tokenCurrent(token, access))) proof = null;
+      }
+      if (!proof) { await recordLoginFailure(db, [ipKey, userKey], now); return json(res, 401, { error: 'invalid_credentials' }); }
+      /* The PIN was right: not a guess, so no failure is counted, and the token stays usable for another user. */
+      if (!allowsUser(access, user.id)) return json(res, 403, { error: 'user_not_allowed' });
+      if (token && !(await consumeTokenId(db, token.jti, now))) { await recordLoginFailure(db, [ipKey, userKey], now); return json(res, 401, { error: 'invalid_credentials' }); }
+      await clearLoginFailures(db, [userKey]);
       act.user = user; act.session = { testerId: proof.testerId || null, super: !!proof.super };
       return startSession(res, user, proof, act);
     }
+    /* Logout closes every session of that tester, on every device (tokens are not stored one by one). */
     if (path === 'auth/logout' && req.method === 'POST') {
       const a = await sessionUser(req);
-      if (a) { act.user = a.user; act.session = a.session; }
+      if (a) { act.user = a.user; act.session = a.session; if (a.session.testerId) await revokeTesterSessions(db, a.session.testerId); }
       return json(res, 200, { ok: true }, { 'set-cookie': cookie('', 0) });
     }
 
     if (path === 'auth/super' && req.method === 'POST') {
       const input = await readBody(req);
       const now = deps.now();
-      const keys = ['ip:' + clientIp(req)];
-      if (await loginBlocked(db, keys, now)) return json(res, 429, { error: 'too_many_attempts' });
-      const tester = await findTesterByPin(db, String(input.pin == null ? '' : input.pin));
+      const ipKey = 'super:' + clientIp(req);
+      if (await attemptsBlocked(db, { ip: ipKey }, now)) return json(res, 429, { error: 'too_many_attempts' });
+      /* The PIN is always checked, right key or not, so the answer time says nothing about the key. */
+      const tester = await findTesterByPin(db, String(input.pin == null ? '' : input.pin), config.secret);
       const keyOk = !!config.superKey && constantEquals(String(input.key == null ? '' : input.key), config.superKey);
-      if (!tester || !tester.super || !keyOk) { await recordLoginFailure(db, keys, now); return json(res, 401, { error: 'invalid_credentials' }); }
-      await clearLoginFailures(db, keys);
+      if (!tester || !tester.super || !keyOk) { await recordLoginFailure(db, [ipKey], now); return json(res, 401, { error: 'invalid_credentials' }); }
       const sid = randomBytes(8).toString('hex');
       act.session = { testerId: tester.id, testerName: tester.name, super: true, sid };
-      return json(res, 200, { tester: { id: tester.id, name: tester.name } }, { 'set-cookie': superCookie(signToken({ kind: 'super', testerId: tester.id, testerName: tester.name, sid }, config.secret, SUPER_TTL), SUPER_TTL) });
+      return json(res, 200, { tester: { id: tester.id, name: tester.name } }, { 'set-cookie': superCookie(superToken(tester, sid), SUPER_TTL) });
     }
     if (path === 'auth/super/logout' && req.method === 'POST') {
-      const sup = superSession(req);
-      if (sup) act.session = { testerId: sup.testerId, testerName: sup.testerName, super: true, sid: sup.sid };
+      const sup = await superSession(req);
+      if (sup) { act.session = { testerId: sup.testerId, testerName: sup.testerName, super: true, sid: sup.sid }; await revokeTesterSessions(db, sup.testerId); }
       return json(res, 200, { ok: true }, { 'set-cookie': superCookie('', 0) });
     }
     /* Lecturas del panel y gestión de probadores: solo con la cookie del super admin, nunca con la sesión de la app. */
     if (path.startsWith('activity/') || path.startsWith('super/')) {
-      const sup = superSession(req);
+      const sup = await superSession(req);
       if (!sup) return json(res, 401, { error: 'super_required' });
       act.session = { testerId: sup.testerId, testerName: sup.testerName, super: true, sid: sup.sid };
       if (req.method === 'GET') {
@@ -156,10 +184,26 @@ export function createApp(deps) {
         const now = deps.now();
         const audit = (summary) => insertAudit(db, { at: now, actorUserId: null, actorRole: 'super', actorName: 'Super admin (' + sup.testerName + ')', command: path, channel: 'super', summary });
         if (path === 'super/regenerate') {
-          const t = await regenerateTesterPin(db, String(input.testerId || ''));
+          const t = await regenerateTesterPin(db, String(input.testerId || ''), config.secret);
           if (!t) return json(res, 404, { error: 'tester_not_found' });
           await audit('Regeneró el PIN de ' + t.name);
-          return json(res, 200, t);
+          /* A new PIN closes every session of that tester; the page that asked for its own new PIN stays open. */
+          const own = t.id === sup.testerId ? { 'set-cookie': superCookie(superToken({ id: sup.testerId, name: sup.testerName }, sup.sid), SUPER_TTL) } : {};
+          return json(res, 200, t, own);
+        }
+        if (path === 'super/allowed') {
+          const t = await getTester(db, String(input.testerId || ''));
+          if (!t) return json(res, 404, { error: 'tester_not_found' });
+          let ids = null;
+          if (input.userIds != null) {
+            if (!Array.isArray(input.userIds)) return json(res, 400, { error: 'invalid_user_ids' });
+            ids = [...new Set(input.userIds.map((x) => String(x).trim()).filter(Boolean))];
+            const known = new Set((await listUsers(db)).map((u) => u.id));
+            if (ids.some((id) => !known.has(id))) return json(res, 400, { error: 'unknown_user' });
+          }
+          const saved = await setAllowedUsers(db, t.id, ids);
+          await audit(ids ? 'Limitó a ' + t.name + ' a los usuarios ' + (ids.join(', ') || '(ninguno)') : 'Permitió a ' + t.name + ' entrar con cualquier usuario');
+          return json(res, 200, saved);
         }
         if (path === 'super/rename') {
           const name = String(input.name || '').trim().slice(0, 60);
@@ -181,8 +225,11 @@ export function createApp(deps) {
 
     const auth = await sessionUser(req);
     if (!auth) return json(res, 401, { error: 'authentication_required' });
-    const { user, session } = auth;
+    const { user, session, access } = auth;
     act.user = user; act.session = session;
+
+    /* The user directory is for "Cambiar usuario", already signed in; step one of the login brings its own. */
+    if (path === 'auth/options' && req.method === 'GET') return json(res, 200, await userOptions(access && access.allowedUsers));
 
     /* Eventos del navegador (pantallas, clics, errores JS). El servidor sella quién los manda. */
     if (path === 'telemetry' && req.method === 'POST') {
@@ -196,6 +243,7 @@ export function createApp(deps) {
       const input = await readBody(req);
       const next = input.userId ? await getUser(db, String(input.userId)) : null;
       if (!next || !next.active) return json(res, 404, { error: 'user_not_found' });
+      if (!allowsUser(access, next.id)) return json(res, 403, { error: 'user_not_allowed' });
       act.user = next;
       return startSession(res, next, session, act, session.sid);
     }

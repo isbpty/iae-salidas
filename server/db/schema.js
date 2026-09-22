@@ -101,4 +101,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS requests_date_code ON requests(date, code) WHE
 ALTER TABLE conversation_state ADD COLUMN IF NOT EXISTS alerts jsonb NOT NULL DEFAULT '[]';
 `,
   },
+  {
+    /* Per-tester access (review S1/S4/S5): which demo users a tester may open (NULL = all), the instant
+       before which their session tokens no longer count (logout, new PIN), and HMAC-SHA256(SESSION_SECRET, pin)
+       so a PIN is found with one indexed read. Testers created earlier keep pin_lookup NULL until their
+       first successful login fills it in (see findTesterByPin). */
+    version: '006_testers_access',
+    sql: `
+ALTER TABLE testers ADD COLUMN IF NOT EXISTS allowed_users jsonb;
+ALTER TABLE testers ADD COLUMN IF NOT EXISTS sessions_valid_after timestamptz;
+ALTER TABLE testers ADD COLUMN IF NOT EXISTS pin_lookup text;
+CREATE UNIQUE INDEX IF NOT EXISTS testers_pin_lookup ON testers(pin_lookup);
+`,
+  },
 ];

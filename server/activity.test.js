@@ -52,8 +52,9 @@ test('every API request leaves a server event with who, what, duration and outco
   assert.equal(byName['auth/logout'].kind, 'logout');
   assert.ok(ev.every((e) => e.source === 'server' && e.tester_id === 't5'));
 
-  /* a successful command records its revision and masked input */
-  const okCmd = await post(base, '/api/commands/mark_notifications_read', { pin: '1' }, cookie);
+  /* a successful command records its revision and masked input (logout revoked the old cookie: log in again) */
+  const again = await loginAs(base, 'u_p1', made[4].pin);
+  const okCmd = await post(base, '/api/commands/mark_notifications_read', { pin: '1' }, again);
   const last = (await rows(t)).pop();
   assert.equal(last.ok, true); assert.equal(last.revision, okCmd.json.revision); assert.deepEqual(last.data, { pin: '***' });
   await close(); await t.close();

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeTestApp, call, loginAs } from '../test-helpers.js';
 
-test('parent sees only the family, plus the directory of account holders', async () => {
+test('parent sees only the family, never a directory of account holders', async () => {
   const t = await makeTestApp();
   await t.run('create_salida', 'u_p5', { studentId: 'e3', date: '2026-09-18', time: '13:00', pickupBy: 'p5', reason: 'x' });
   const v = await t.view('u_p1');
@@ -13,8 +13,7 @@ test('parent sees only the family, plus the directory of account holders', async
   assert.deepEqual(Object.keys(v.persons).sort(), ['p1', 'p2', 'p3', 'p4', 'p5']);
   assert.equal(v.persons.p3.docAttachmentId, 'att_p3');
   assert.ok(!('bytes' in v.persons.p3));
-  assert.deepEqual(v.accounts.map((a) => a.id), ['p2', 'p5', 'p6', 'p7']);
-  assert.ok(!('phone' in v.accounts[0]), 'directory has no phones');
+  assert.equal(v.accounts, undefined, 'no directory of the other families: add_authorization looks people up by exact cédula or phone');
   assert.deepEqual(v.authorizations.map((a) => a.id), ['a1', 'a2', 'a3', 'a4']);
   const a4 = v.authorizations.find((a) => a.id === 'a4');
   assert.equal(a4.expiresOn, '2026-09-24', 'a4 (una_vez, no explicit valid_to) carries its server-computed default expiry (school tz), not left for the client to compute');

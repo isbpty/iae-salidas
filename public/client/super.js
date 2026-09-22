@@ -154,12 +154,14 @@ function timeline() {
   if (SUP.nextBefore) h += '<div class="actions"><button class="btn" data-action="more">Cargar más</button></div>';
   return h;
 }
+const allowedText = (t) => (Array.isArray(t.allowedUsers) ? (t.allowedUsers.length ? t.allowedUsers.map((id) => esc(userName(id))).join(', ') : '<span class="danger-text">ninguno</span>') : '<span class="muted">todos</span>');
 function testersBlock() {
   const list = SUP.testers || [];
   let h = '<div class="card"><h3>🔐 Probadores y PINs</h3><p class="small muted">Cada probador tiene un PIN de 6 dígitos. El PIN nunca se guarda en claro: al regenerarlo se muestra <b>una sola vez</b>.</p>';
   if (SUP.newPin) h += '<div class="pin-box">Nuevo PIN de <b>' + esc(SUP.newPin.name) + '</b>: <span class="mono big">' + esc(SUP.newPin.pin) + '</span> <button class="btn tiny" data-action="copyPin">Copiar</button> <button class="btn tiny" data-action="hidePin">Ocultar</button></div>';
-  h += list.length ? '<table class="tbl"><tr><th>Id</th><th>Nombre</th><th></th><th>Creado</th><th></th></tr>' + list.map((t) => '<tr><td class="mono">' + esc(t.id) + '</td><td><b>' + esc(t.name) + '</b></td><td>' + (t.super ? '<span class="badge">super</span>' : '') + '</td><td class="small">' + fmtTs(t.createdAt) + '</td>' +
-    '<td><button class="btn tiny" data-action="rename" data-id="' + esc(t.id) + '">✏️ Renombrar</button> <button class="btn tiny danger" data-action="regen" data-id="' + esc(t.id) + '">🔑 Nuevo PIN</button></td></tr>').join('') + '</table>' : '<div class="empty">Cargando…</div>';
+  h += '<p class="small muted">Usuarios: con qué usuarios del demo puede entrar cada PIN (vacío = todos). Un PIN nuevo cierra las sesiones abiertas de ese probador.</p>';
+  h += list.length ? '<table class="tbl"><tr><th>Id</th><th>Nombre</th><th></th><th>Usuarios</th><th>Creado</th><th></th></tr>' + list.map((t) => '<tr><td class="mono">' + esc(t.id) + '</td><td><b>' + esc(t.name) + '</b></td><td>' + (t.super ? '<span class="badge">super</span>' : '') + '</td><td class="small">' + allowedText(t) + '</td><td class="small">' + fmtTs(t.createdAt) + '</td>' +
+    '<td><button class="btn tiny" data-action="rename" data-id="' + esc(t.id) + '">✏️ Renombrar</button> <button class="btn tiny" data-action="allowed" data-id="' + esc(t.id) + '">👥 Usuarios</button> <button class="btn tiny danger" data-action="regen" data-id="' + esc(t.id) + '">🔑 Nuevo PIN</button></td></tr>').join('') + '</table>' : '<div class="empty">Cargando…</div>';
   return h + '<div class="actions"><button class="btn small danger" data-action="purge">🧹 Borrar actividad de más de 30 días</button></div></div>';
 }
 
@@ -183,9 +185,19 @@ const ACTIONS = {
     const name = prompt('Nuevo nombre para ' + (t ? t.name : el.dataset.id) + ':', t ? t.name : '');
     if (name && name.trim()) postJ('/api/super/rename', { testerId: el.dataset.id, name: name.trim() }).then(() => { toast('Probador renombrado', 'ok'); load(); }, (e) => toast('No se pudo renombrar: ' + e.message, 'error'));
   },
+  allowed(el) {
+    const t = (SUP.testers || []).find((x) => x.id === el.dataset.id);
+    const avail = (SUP.users || []).map((u) => u.id + ' (' + u.name + ')').join(', ');
+    const cur = t && Array.isArray(t.allowedUsers) ? t.allowedUsers.join(', ') : '';
+    const text = prompt('Usuarios que puede abrir ' + (t ? t.name : el.dataset.id) + ': ids separados por coma. Vacío = todos.\nDisponibles: ' + avail, cur);
+    if (text === null) return;
+    const ids = text.split(',').map((x) => x.trim()).filter(Boolean);
+    postJ('/api/super/allowed', { testerId: el.dataset.id, userIds: ids.length ? ids : null })
+      .then(() => { toast(ids.length ? 'Usuarios limitados' : 'Puede entrar con todos los usuarios', 'ok'); load(); }, (e) => toast(e.message === 'unknown_user' ? 'Algún id no existe' : 'No se pudo guardar: ' + e.message, 'error'));
+  },
   regen(el) {
     const t = (SUP.testers || []).find((x) => x.id === el.dataset.id);
-    if (!confirm('¿Generar un PIN nuevo para ' + (t ? t.name : el.dataset.id) + '? El PIN actual dejará de funcionar.')) return;
+    if (!confirm('¿Generar un PIN nuevo para ' + (t ? t.name : el.dataset.id) + '? El PIN actual dejará de funcionar y se cerrarán sus sesiones abiertas.')) return;
     postJ('/api/super/regenerate', { testerId: el.dataset.id }).then((r) => { SUP.newPin = r; render(); }, (e) => toast('No se pudo regenerar: ' + e.message, 'error'));
   },
   purge() { if (confirm('¿Borrar los eventos de actividad de más de 30 días?')) postJ('/api/super/purge', { beforeDays: 30 }).then((r) => { toast('Borrados ' + r.deleted + ' eventos', 'ok'); load(); }, (e) => toast('No se pudo borrar: ' + e.message, 'error')); },

@@ -6,12 +6,31 @@ export function constantEquals(a, b) {
   const x = Buffer.from(String(a)), y = Buffer.from(String(b));
   return x.length === y.length && timingSafeEqual(x, y);
 }
+/* An address that failed this many times inside the window is "suspect" for the per-user counter. */
+const SUSPECT = 3;
+async function failures(q, key, now) {
+  const [row] = await q.query('SELECT count, window_start FROM login_attempts WHERE key=$1', [key]);
+  return row && now.getTime() - new Date(row.window_start).getTime() < WINDOW_MS ? row.count : 0;
+}
 export async function loginBlocked(q, keys, now) {
-  for (const key of keys) {
-    const [row] = await q.query('SELECT count, window_start FROM login_attempts WHERE key=$1', [key]);
-    if (row && row.count >= LIMIT && now.getTime() - new Date(row.window_start).getTime() < WINDOW_MS) return true;
-  }
+  for (const key of keys) if ((await failures(q, key, now)) >= LIMIT) return true;
   return false;
+}
+/* One counter per surface and address (`pin:<ip>`, `login:<ip>`, `super:<ip>`), never cleared by a success:
+   a valid PIN must not buy ten more guesses. The per-user counter (`user:<id>`) only blocks an address that is
+   failing too, so a stranger cannot lock somebody else out of their account from afar. */
+export async function attemptsBlocked(q, { ip, user }, now) {
+  const ipFails = await failures(q, ip, now);
+  if (ipFails >= LIMIT) return true;
+  return !!user && ipFails >= SUSPECT && (await failures(q, user, now)) >= LIMIT;
+}
+/* A PIN token logs in once: its id is kept (as a `jti:` row) for longer than the token lives. Each use also
+   sweeps rows whose window is over: expired failure counters restart at 1 anyway. */
+export async function consumeTokenId(q, jti, now) {
+  if (!jti) return false;
+  await q.query("DELETE FROM login_attempts WHERE window_start < $1", [new Date(now.getTime() - WINDOW_MS).toISOString()]);
+  const rows = await q.query('INSERT INTO login_attempts(key, count, window_start) VALUES ($1, 0, $2) ON CONFLICT (key) DO NOTHING RETURNING key', ['jti:' + jti, now.toISOString()]);
+  return rows.length === 1;
 }
 export async function recordLoginFailure(q, keys, now) {
   const cutoff = new Date(now.getTime() - WINDOW_MS).toISOString();

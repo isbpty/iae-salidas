@@ -24,7 +24,8 @@ const login = (userId) => timed('login', async () => (await call('/api/auth/logi
 const pct = (arr, p) => { if (!arr.length) return 0; const s = [...arr].sort((a, b) => a - b); return Math.round(s[Math.min(s.length - 1, Math.floor(p * s.length))]); };
 const hhmm = (d) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 
-const options = (await call('/api/auth/options')).json;
+/* The user list comes with step one of the login (GET /api/auth/options needs a session). */
+const options = (await call('/api/auth/pin', { method: 'POST', body: { pin: PIN } })).json.options;
 const parents = options.filter((u) => u.role === 'parent').slice(0, PARENTS);
 const reception = options.find((u) => u.role === 'recepcion');
 console.log(`base ${BASE} · ${parents.length} padres · ${ROUNDS} ronda(s)`);

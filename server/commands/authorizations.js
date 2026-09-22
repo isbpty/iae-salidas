@@ -9,8 +9,8 @@ const creatorOf = (ctx) => (ctx.person
   ? { personId: ctx.person.id, name: ctx.person.name, isStaff: false }
   : { personId: null, name: ctx.staff.name, isStaff: true });
 
-/* A parent may only point at a person they are already meant to see: an account holder from the
-   directory the app shows them, or somebody already authorized for one of their own students.
+/* A parent may only point at a person they are already meant to see: an account holder (found with
+   lookup_person), or somebody already authorized for one of their own students.
    Anything else would turn `personId` into a lookup of another family's cédula and document. */
 async function requireVisiblePerson(ctx, personId) {
   const p = await getPerson(ctx.q, personId);
@@ -22,7 +22,28 @@ async function requireVisiblePerson(ctx, personId) {
   return p;
 }
 
+/* Phones compare by their digits, with or without Panama's country code (507). */
+const phoneDigits = (v) => { const d = String(v || '').replace(/\D/g, ''); return d.length > 8 && d.startsWith('507') ? d.slice(3) : d; };
+
 register({
+  /* A parent authorizing somebody who already has an account names them by their full cédula or phone:
+     an exact match returns only id, name and relation; anything else is 404. There is no directory. */
+  lookup_person: {
+    roles: ['parent'],
+    handler: async (ctx, input) => {
+      const cedula = String(input.cedula || '').trim().toLowerCase();
+      const phone = phoneDigits(input.phone);
+      if (!cedula && !phone) badRequest('lookup_required');
+      const [p] = await ctx.q.query(
+        `SELECT id, name, relation FROM persons
+          WHERE has_account AND id <> $1
+            AND (($2 <> '' AND lower(trim(cedula)) = $2)
+              OR ($3 <> '' AND (regexp_replace(coalesce(phone, ''), '[^0-9]', '', 'g') IN ($3, '507' || $3))))
+          ORDER BY id LIMIT 1`, [ctx.person.id, cedula, phone]);
+      if (!p) notFound('person_not_found');
+      return { id: p.id, name: p.name, relation: p.relation };
+    },
+  },
   add_authorization: {
     roles: ['parent', ...STAFF_ROLES],
     handler: async (ctx, input) => {
