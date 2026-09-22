@@ -8,6 +8,12 @@ document.addEventListener('DOMContentLoaded', () => {
   document.addEventListener('click', onClick);
   document.addEventListener('submit', onSubmit);
   document.addEventListener('change', onChange);
+  document.addEventListener('input', (e) => { if (e.target.id === 'schoolSearch') { UI.q = e.target.value; clearTimeout(searchTimer); searchTimer = setTimeout(render, 120); } });
+  document.addEventListener('keydown', (e) => {
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target.tagName || '')) || e.target.isContentEditable;
+    if (e.key === '/' && !typing && UI.view === 'school' && !UI.modal) { const box = document.getElementById('schoolSearch'); if (box) { e.preventDefault(); box.focus(); box.select(); } }
+    if (e.key === 'Escape' && e.target.id === 'schoolSearch') { UI.q = ''; e.target.value = ''; render(); }
+  });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && e.target.id === 'waInput') { e.preventDefault(); sendChat(); }
     if (e.key === 'Escape' && UI.modal) { UI.modal = null; renderModal(); }
@@ -39,6 +45,20 @@ function initTheme() {
   applyTheme(t);
 }
 
+/* ---------- Buscador de Escuela: filtra la pestaña activa por nombre, grado, cédula, teléfono, código… ---------- */
+let searchTimer = null;
+const normQ = (v) => String(v == null ? '' : v).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+function matchQ(...fields) {
+  const q = normQ(UI.q).trim();
+  if (!q) return true;
+  const hay = normQ(fields.flat().filter((x) => x != null).join(' '));
+  return q.split(/\s+/).every((w) => hay.includes(w));
+}
+const personQ = (id) => { const p = person(id) || {}; return [p.name, p.relation, p.cedula, p.phone]; };
+const studentQ = (s) => (s ? [s.name, s.grade, levelName(s.levelId), (s.titulares || []).map(personQ)] : []);
+const requestQ = (r) => [studentQ(student(r.studentId)), personQ(r.requestedBy), r.pickupBy ? personQ(r.pickupBy) : null, r.code, r.status, STATUS[r.status], r.kind, r.excusaType, r.reason, r.pickupPoint, r.date, r.time];
+const SEARCH_TABS = ['solicitudes', 'salidas_hoy', 'excusas', 'estudiantes', 'autorizados', 'personal', 'bitacora'];
+function searchHint(count, total) { return UI.q ? '<div class="search-hint">🔎 ' + count + ' de ' + total + ' coinciden con «' + esc(UI.q) + '» <button class="btn tiny" data-action="clearSearch">✕ limpiar</button></div>' : ''; }
 /* ---------- Render principal ---------- */
 let pendingTimer = null;
 function render() {
@@ -46,7 +66,7 @@ function render() {
   document.body.classList.toggle('tv-mode', UI.view === 'tv');
   const main = document.getElementById('main');
   const active = document.activeElement;
-  const keep = active && active.id === 'waInput' ? { id: 'waInput', value: active.value } : null;
+  const keep = active && (active.id === 'waInput' || active.id === 'schoolSearch') ? { id: active.id, value: active.value, pos: active.selectionStart } : null;
   renderTabs();
   if (UI.split && ME.role === 'admin') {
     main.className = 'split';
@@ -57,7 +77,7 @@ function render() {
   }
   renderModal();
   drawQRs();
-  if (keep) { const el = document.getElementById(keep.id); if (el) { el.value = keep.value; el.focus(); } }
+  if (keep) { const el = document.getElementById(keep.id); if (el) { el.value = keep.value; el.focus(); if (keep.pos != null) try { el.setSelectionRange(keep.pos, keep.pos); } catch { /* no aplica */ } } }
   const chat = document.getElementById('waChat');
   if (chat) chat.scrollTop = chat.scrollHeight;
   T.screen(currentScreen());
@@ -283,6 +303,7 @@ function viewSchool() {
     '<div class="side-user"><label class="small muted">Usuario</label><div><b>' + esc(staff.name) + '</b></div>' +
     (V.tester && V.tester.id ? '<div class="small muted">Probador: ' + esc(V.tester.name) + '</div>' : '') +
     '<div class="small"><span class="badge role-' + staff.role + '">' + esc(roleName(staff.role)) + '</span> ' + scope + '</div></div>' +
+    (SEARCH_TABS.includes(UI.schoolTab) ? '<div class="side-search"><input id="schoolSearch" type="search" placeholder="Buscar…  (tecla /)" value="' + esc(UI.q) + '" autocomplete="off"><div class="small muted">nombre, grado, cédula, teléfono, código</div></div>' : '') +
     '<nav class="side-nav">' + tabs.map(([k, l]) => '<button class="' + (UI.schoolTab === k ? 'active' : '') + '" data-action="schoolTab" data-tab="' + k + '">' + l + (k === 'inicio' && unread ? '<span class="dot">' + unread + '</span>' : '') + '</button>').join('') + '</nav></aside>' +
     '<section class="content">' + body + '</section></div>';
 }
@@ -333,15 +354,18 @@ function schoolRequests(staff) {
   const f = UI.filter;
   let list = V.requests.filter((r) => r.kind === 'salida');
   if (f !== 'todas') list = list.filter((r) => r.status === f);
+  const total = list.length;
+  list = list.filter((r) => matchQ(requestQ(r)));
   const filters = ['todas', 'pendiente', 'aprobada', 'retirado', 'rechazada', 'cancelada'];
-  return '<h2>Solicitudes de salida</h2><div class="filters">' + filters.map((x) => '<button class="chip' + (f === x ? ' active' : '') + '" data-action="setFilter" data-f="' + x + '">' + (x === 'todas' ? 'Todas' : STATUS[x]) + '</button>').join('') + '</div>' +
-    (list.length ? list.map((r) => schoolReqCard(r, staff)).join('') : '<div class="empty">No hay solicitudes con este filtro.</div>');
+  return '<h2>Solicitudes de salida</h2><div class="filters">' + filters.map((x) => '<button class="chip' + (f === x ? ' active' : '') + '" data-action="setFilter" data-f="' + x + '">' + (x === 'todas' ? 'Todas' : STATUS[x]) + '</button>').join('') + '</div>' + searchHint(list.length, total) +
+    (list.length ? list.slice(0, 200).map((r) => schoolReqCard(r, staff)).join('') + (list.length > 200 ? '<div class="empty">Mostrando 200 de ' + list.length + '. Afina la búsqueda.</div>' : '') : '<div class="empty">No hay solicitudes con este filtro.</div>');
 }
 function schoolGate(staff) {
   const t = todayISO();
   const list = V.requests.filter((r) => r.kind === 'salida' && r.date === t && ['aprobada', 'retirado'].includes(r.status)).sort((a, b) => a.time.localeCompare(b.time));
-  const pend = list.filter((r) => r.status === 'aprobada');
-  const done = list.filter((r) => r.status === 'retirado');
+  const shown = list.filter((r) => matchQ(requestQ(r)));
+  const pend = shown.filter((r) => r.status === 'aprobada');
+  const done = shown.filter((r) => r.status === 'retirado');
   const card = (r) => {
     const st = student(r.studentId);
     const pk = person(r.pickupBy) || {};
@@ -360,7 +384,7 @@ function schoolGate(staff) {
       '<div class="small">📍 ' + esc(r.pickupPoint) + ' · código <b class="mono">' + r.code + '</b>' + (conf ? ' · confirmación: <b>' + conf + '</b>' : '') + (r.status === 'retirado' ? ' · <b>salió ' + fmtClock(r.exitAt) + '</b>' : '') + '</div>' +
       '<div class="actions">' + act + '</div></div></div>';
   };
-  return '<h2>Garita · salidas de hoy <span class="muted small">' + new Date().toLocaleDateString('es-PA', { weekday: 'long', day: 'numeric', month: 'long' }) + '</span> <span class="right"><button class="btn small" data-action="setView" data-view="tv" title="Pantalla grande para el monitor de la puerta">📺 Pantalla de garita</button> <button class="btn small primary" data-action="openModal" data-modal="scan">📷 Escanear QR / código</button></span></h2><h3>Por retirar (' + pend.length + ')</h3>' + (pend.length ? pend.map(card).join('') : '<div class="empty">No hay salidas aprobadas pendientes.</div>') +
+  return '<h2>Garita · salidas de hoy <span class="muted small">' + new Date().toLocaleDateString('es-PA', { weekday: 'long', day: 'numeric', month: 'long' }) + '</span> <span class="right"><button class="btn small" data-action="setView" data-view="tv" title="Pantalla grande para el monitor de la puerta">📺 Pantalla de garita</button> <button class="btn small primary" data-action="openModal" data-modal="scan">📷 Escanear QR / código</button></span></h2>' + searchHint(shown.length, list.length) + '<h3>Por retirar (' + pend.length + ')</h3>' + (pend.length ? pend.map(card).join('') : '<div class="empty">No hay salidas aprobadas pendientes.</div>') +
     '<h3>Retirados (' + done.length + ')</h3>' + (done.length ? done.map(card).join('') : '<div class="empty">Nadie ha salido todavía.</div>');
 }
 /* Modo pantalla: para un monitor en la garita. Tarjetas grandes, foto del autorizado, reloj; se actualiza solo. */
@@ -384,12 +408,13 @@ function viewTv() {
     (done.length ? '<section class="tv-done"><h2>Retirados hoy <span class="tv-count">' + done.length + '</span></h2><div class="tv-list">' + done.slice(0, 8).map((r) => { const st = student(r.studentId); const pk = person(r.pickupBy) || {}; return '<div>' + fmtClock(r.exitAt) + ' · <b>' + esc(st.name) + '</b> · ' + esc(pk.name) + '</div>'; }).join('') + '</div></section>' : '') + '</div>';
 }
 function schoolExcusas(staff) {
-  const list = V.requests.filter((r) => r.kind === 'excusa');
-  return '<h2>Excusas (ausencias y tardanzas)</h2>' + (list.length ? list.map((r) => schoolReqCard(r, staff)).join('') : '<div class="empty">Sin excusas.</div>');
+  const all = V.requests.filter((r) => r.kind === 'excusa');
+  const list = all.filter((r) => matchQ(requestQ(r)));
+  return '<h2>Excusas (ausencias y tardanzas)</h2>' + searchHint(list.length, all.length) + (list.length ? list.slice(0, 200).map((r) => schoolReqCard(r, staff)).join('') : '<div class="empty">Sin excusas.</div>');
 }
 function schoolStudents(staff) {
-  const scope = V.students;
-  return '<h2>Estudiantes y familias</h2>' + V.levels.map((lv) => {
+  const scope = V.students.filter((s) => matchQ(studentQ(s), authsForStudent(s.id).filter(isAuthActive).map((a) => personQ(a.personId)), (route(s.routeId) || {}).name));
+  return '<h2>Estudiantes y familias</h2>' + searchHint(scope.length, V.students.length) + (scope.length ? '' : '<div class="empty">Ningún estudiante coincide.</div>') + V.levels.map((lv) => {
     const kids = scope.filter((s) => s.levelId === lv.id);
     if (!kids.length) return '';
     return '<h3>' + esc(lv.name) + '</h3><table class="tbl"><tr><th>Estudiante</th><th>Grado</th><th>Titulares</th><th>Autorizados vigentes</th><th>Bus</th><th>Solicitudes</th></tr>' + kids.map((k) =>
@@ -399,8 +424,9 @@ function schoolStudents(staff) {
 }
 function schoolAuths(staff) {
   const scope = new Set(V.students.map((s) => s.id));
-  const list = V.authorizations.filter((a) => scope.has(a.studentId));
-  return '<h2>Personas autorizadas</h2><table class="tbl"><tr><th>Persona</th><th>Cédula</th><th>Estudiante</th><th>Tipo</th><th>Vigencia</th><th>Registró</th><th>Estado</th><th></th></tr>' + list.map((a) => {
+  const all = V.authorizations.filter((a) => scope.has(a.studentId));
+  const list = all.filter((a) => matchQ(personQ(a.personId), studentQ(student(a.studentId)), kindLabel(a.type), a.revokedAt ? 'revocada' : isAuthActive(a) ? 'activa' : 'inactiva'));
+  return '<h2>Personas autorizadas</h2>' + searchHint(list.length, all.length) + (list.length ? '' : '<div class="empty">Ninguna autorización coincide.</div>') + '<table class="tbl"><tr><th>Persona</th><th>Cédula</th><th>Estudiante</th><th>Tipo</th><th>Vigencia</th><th>Registró</th><th>Estado</th><th></th></tr>' + list.map((a) => {
     const p = person(a.personId) || {}; const s = student(a.studentId) || {};
     const vig = a.type === 'temporal' ? a.validFrom + ' → ' + a.validTo : a.type === 'una_vez' ? (a.usedAt ? 'usada ' + fmtTs(a.usedAt) : 'pendiente de uso') : 'permanente';
     const estado = a.revokedAt ? '<span class="badge st-rechazada">Revocada</span>' : isAuthActive(a) ? '<span class="badge st-aprobada">Activa</span>' : '<span class="badge st-cancelada">Inactiva</span>';
@@ -418,7 +444,8 @@ function schoolStaff(staff) {
       caps.map(([c, l]) => '<tr><td>' + l + '</td>' + roles.map((r) => '<td class="center"><input type="checkbox" data-change="togglePerm" data-role="' + r + '" data-cap="' + c + '"' + (r === 'admin' || (perms[r] || {})[c] ? ' checked' : '') + (r === 'admin' ? ' disabled' : '') + '></td>').join('') + '</tr>').join('') + '</table>' +
       '<p class="muted small">Los profesores sin "Todos los niveles" solo ven los grados que tienen asignados; las monitoras solo ven los estudiantes de su ruta.</p>'
     : '<p class="muted small">Solo Administración puede ver y editar la matriz de permisos.</p>';
-  return '<h2>Personal</h2><table class="tbl"><tr><th>Nombre</th><th>Rol</th><th>Cargo</th><th>Alcance</th></tr>' + V.staff.map((s) => '<tr><td>' + esc(s.name) + '</td><td><span class="badge role-' + s.role + '">' + esc(roleName(s.role)) + '</span></td><td>' + esc(s.title || '') + '</td><td>' + (s.routeId ? 'Solo ' + esc((route(s.routeId) || {}).name || s.routeId) : s.grades ? esc(s.grades.join(', ')) : 'Todos los niveles') + '</td></tr>').join('') + '</table>' + matrix;
+  const people = V.staff.filter((s) => matchQ(s.name, roleName(s.role), s.title, s.grades, (route(s.routeId) || {}).name));
+  return '<h2>Personal</h2>' + searchHint(people.length, V.staff.length) + '<table class="tbl"><tr><th>Nombre</th><th>Rol</th><th>Cargo</th><th>Alcance</th></tr>' + people.map((s) => '<tr><td>' + esc(s.name) + '</td><td><span class="badge role-' + s.role + '">' + esc(roleName(s.role)) + '</span></td><td>' + esc(s.title || '') + '</td><td>' + (s.routeId ? 'Solo ' + esc((route(s.routeId) || {}).name || s.routeId) : s.grades ? esc(s.grades.join(', ')) : 'Todos los niveles') + '</td></tr>').join('') + '</table>' + matrix;
 }
 function schoolConfig() {
   const c = V.settings;
@@ -444,7 +471,9 @@ function schoolLog() {
   return '<h2>Bitácora</h2>' + logTable();
 }
 function logTable() {
-  return '<table class="tbl"><tr><th>Fecha</th><th>Actor</th><th>Evento</th></tr>' + (V.audit || []).slice(0, 200).map((l) => '<tr><td class="mono small">' + fmtTs(l.ts) + '</td><td>' + esc(l.actor) + '</td><td>' + esc(l.text) + '</td></tr>').join('') + '</table>';
+  const all = V.audit || [];
+  const rows = UI.view === 'school' ? all.filter((l) => matchQ(l.actor, l.text, fmtTs(l.ts))) : all;
+  return (UI.view === 'school' ? searchHint(rows.length, all.length) : '') + '<table class="tbl"><tr><th>Fecha</th><th>Actor</th><th>Evento</th></tr>' + rows.slice(0, 200).map((l) => '<tr><td class="mono small">' + fmtTs(l.ts) + '</td><td>' + esc(l.actor) + '</td><td>' + esc(l.text) + '</td></tr>').join('') + '</table>';
 }
 function viewLog() { return '<div class="page"><h2>📜 Bitácora del sistema</h2>' + logTable() + '</div>'; }
 
@@ -669,7 +698,7 @@ function run(name, input, okText) {
   return apply(name, input).then((res) => { render(); if (okText) toast(okText, 'ok'); return res; }).catch(() => null);
 }
 const ACTIONS = {
-  setView(el) { UI.view = el.dataset.view; },
+  setView(el) { UI.view = el.dataset.view; if (UI.view !== 'school') UI.q = ''; },
   logout() { doLogout(); },
   switchUser() { showSwitch(); },
   resetDemo() { if (confirm('¿Reiniciar el demo con los datos de ejemplo?')) run('reset_demo', {}, 'Demo reiniciado con datos de ejemplo').then(() => { UI.modal = null; render(); }); },
@@ -691,6 +720,7 @@ const ACTIONS = {
   parentTab(el) { UI.parentTab = el.dataset.tab; },
   schoolTab(el) { UI.schoolTab = el.dataset.tab; },
   setFilter(el) { UI.filter = el.dataset.f; },
+  clearSearch() { UI.q = ''; },
   chatSend() { sendChat(); },
   chatQuick(el) { sendText(el.dataset.text); },
   cancelReq(el) { if (confirm('¿Cancelar esta solicitud?')) run('cancel_request', { requestId: el.dataset.id }); },

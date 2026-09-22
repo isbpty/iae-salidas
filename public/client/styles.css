@@ -313,3 +313,10 @@ body.tv-mode { background: #0b1220; color: #e5e9f0; }
 [data-theme="dark"] .tbl tr.bad td { background: #2a1a1a; }
 [data-theme="dark"] .tbl tr.selected td { background: #1a2540; }
 [data-theme="dark"] .modal { background: rgba(0, 0, 0, .65); }
+
+/* ---------- Buscador de Escuela ---------- */
+.side-search { margin-bottom: 10px; }
+.side-search input { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; background: var(--bg); color: var(--ink); }
+.side-search input:focus { outline: 2px solid rgba(31, 94, 255, .35); border-color: var(--primary); }
+.search-hint { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); background: #eef3ff; border: 1px solid #d6e2ff; border-radius: 8px; padding: 6px 10px; margin-bottom: 10px; }
+[data-theme="dark"] .search-hint { background: #1a2540; border-color: #273043; }

@@ -1,6 +1,6 @@
 /* Estado del cliente: la proyección V que manda el servidor y el estado de interfaz UI. */
 let V = null, ME = null, REV = 0, SKEW = 0;
-const UI = { view: 'parents', split: false, phoneId: 'p1', schoolTab: 'inicio', parentTab: 'inicio', modal: null, filter: 'todas', busy: false };
+const UI = { view: 'parents', split: false, phoneId: 'p1', schoolTab: 'inicio', parentTab: 'inicio', modal: null, filter: 'todas', busy: false, q: '' };
 const FORM_MODALS = ['newSalida', 'newExcusa', 'newAuth', 'reject', 'scan'];
 let markTimer = null, subscribed = false;
 /* Mientras el formulario de login está en pantalla nadie más toca el modal:
