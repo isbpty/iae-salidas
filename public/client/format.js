@@ -13,9 +13,6 @@ function localISO(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-
 /* "hoy" es el día de la escuela que manda el servidor (V.today), no el del navegador. */
 function todayISO() { return (typeof V !== 'undefined' && V && V.today) || localISO(new Date()); }
 function shiftISO(days) { const d = new Date(todayISO() + 'T12:00:00'); d.setDate(d.getDate() + days); return localISO(d); }
-/* Adds `days` calendar days to a millisecond timestamp, e.g. an authorization's createdAt, and
-   returns YYYY-MM-DD. Used for the default una_vez expiry (mirrors server/domain/eligibility.js). */
-function addDaysISO(ms, days) { const d = new Date(ms); d.setDate(d.getDate() + days); return localISO(d); }
 function nowHHMM() { const d = new Date(); return pad(d.getHours()) + ':' + pad(d.getMinutes()); }
 function minutesOf(hhmm) { const [h, m] = hhmm.split(':').map(Number); return h * 60 + m; }
 function addMinutes(hhmm, n) { const t = ((minutesOf(hhmm) + n) % 1440 + 1440) % 1440; return pad(Math.floor(t / 60)) + ':' + pad(t % 60); }

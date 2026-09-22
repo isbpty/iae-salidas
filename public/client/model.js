@@ -8,15 +8,21 @@ const levelName = (id) => ((V.levels || []).find((l) => l.id === id) || {}).name
 function studentsOf(personId) { return (V.students || []).filter((s) => (s.titulares || []).includes(personId)); }
 /* `date` defaults to "hoy" but a caller building the salida form must pass the date actually
    being requested: a temporal or una_vez authorization is only valid for its own window, which
-   may not include today (mirrors server/domain/eligibility.js). */
+   may not include today (mirrors server/domain/eligibility.js).
+   `date` must be a YYYY-MM-DD string; anything else (notably a bare `.filter(isAuthActive)`,
+   which passes the array index as the second argument) falls back to "hoy" instead of comparing
+   dates against a number. */
 function isAuthActive(a, date) {
-  const t = date || todayISO();
+  const t = typeof date === 'string' && date ? date : todayISO();
   if (a.revokedAt) return false;
   if (a.type === 'siempre') return true;
   if (a.type === 'temporal') return a.validFrom <= t && t <= a.validTo;
   if (a.type === 'una_vez') {
     if (a.usedAt) return false;
-    const validTo = a.validTo || (a.createdAt ? addDaysISO(a.createdAt, 7) : null);
+    /* expiresOn is computed server-side, in the school's timezone (server/domain/eligibility.js
+       withAuthExpiry) -- the client never redoes "createdAt + 7 days" arithmetic in the browser's
+       own local timezone, which used to disagree with the server around the cutoff day. */
+    const validTo = a.validTo || a.expiresOn || null;
     return !validTo || t <= validTo;
   }
   return false;

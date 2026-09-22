@@ -132,7 +132,7 @@ function parentHome(p) {
   h += kids.map((k) => {
     const others = k.titulares.filter((t) => t !== p.id).map((t) => (person(t) || {}).name || '');
     return '<div class="card kid"><div class="avatar">' + k.emoji + '</div><div class="grow"><b>' + esc(k.name) + '</b><div class="muted small">' + esc(k.grade) + ' · ' + esc(levelName(k.levelId)) + '</div>' +
-      '<div class="muted small">Titulares: tú' + (others.length ? ', ' + esc(others.join(', ')) : '') + ' · Autorizados: ' + authsForStudent(k.id).filter(isAuthActive).length + '</div>' +
+      '<div class="muted small">Titulares: tú' + (others.length ? ', ' + esc(others.join(', ')) : '') + ' · Autorizados: ' + authsForStudent(k.id).filter((a) => isAuthActive(a)).length + '</div>' +
       '<div class="small" style="margin-top:4px">' + busChip(k) + '</div>' +
       '<div class="actions"><button class="btn tiny" data-action="whereKid" data-id="' + k.id + '">📍 ¿Dónde está?</button>' + (k.routeId ? '<button class="btn tiny" data-action="noBusKid" data-id="' + k.id + '">🚌 Hoy no va en bus</button>' : '') + '</div></div></div>';
   }).join('');
@@ -247,7 +247,7 @@ function chatChips(p, key) {
   const t1 = fmtTime(addMinutes(nowHHMM(), 125));
   const t2 = fmtTime(addMinutes(nowHHMM(), 30));
   const chips = ['Hola', 'Necesito retirar a ' + firstName(k.name) + ' hoy a las ' + t1];
-  const auths = authsForStudent(k.id).filter(isAuthActive);
+  const auths = authsForStudent(k.id).filter((a) => isAuthActive(a));
   if (auths.length) {
     const a = auths[0];
     const ap = person(a.personId) || {};
@@ -413,13 +413,13 @@ function schoolExcusas(staff) {
   return '<h2>Excusas (ausencias y tardanzas)</h2>' + searchHint(list.length, all.length) + (list.length ? list.slice(0, 200).map((r) => schoolReqCard(r, staff)).join('') : '<div class="empty">Sin excusas.</div>');
 }
 function schoolStudents(staff) {
-  const scope = V.students.filter((s) => matchQ(studentQ(s), authsForStudent(s.id).filter(isAuthActive).map((a) => personQ(a.personId)), (route(s.routeId) || {}).name));
+  const scope = V.students.filter((s) => matchQ(studentQ(s), authsForStudent(s.id).filter((a) => isAuthActive(a)).map((a) => personQ(a.personId)), (route(s.routeId) || {}).name));
   return '<h2>Estudiantes y familias</h2>' + searchHint(scope.length, V.students.length) + (scope.length ? '' : '<div class="empty">Ningún estudiante coincide.</div>') + V.levels.map((lv) => {
     const kids = scope.filter((s) => s.levelId === lv.id);
     if (!kids.length) return '';
     return '<h3>' + esc(lv.name) + '</h3><table class="tbl"><tr><th>Estudiante</th><th>Grado</th><th>Titulares</th><th>Autorizados vigentes</th><th>Bus</th><th>Solicitudes</th></tr>' + kids.map((k) =>
       '<tr><td>' + k.emoji + ' ' + esc(k.name) + '</td><td>' + esc(k.grade) + '</td><td>' + k.titulares.map((t) => esc((person(t) || {}).name) + ' <span class="muted small">(' + esc((person(t) || {}).relation) + ' · ' + esc((person(t) || {}).phone) + ')</span>').join('<br>') + '</td>' +
-      '<td>' + (authsForStudent(k.id).filter(isAuthActive).map((a) => esc((person(a.personId) || {}).name) + ' ' + kindBadge(a.type)).join('<br>') || '<span class="muted">—</span>') + '</td><td>' + busChip(k) + '</td><td>' + V.requests.filter((r) => r.studentId === k.id).length + '</td></tr>').join('') + '</table>';
+      '<td>' + (authsForStudent(k.id).filter((a) => isAuthActive(a)).map((a) => esc((person(a.personId) || {}).name) + ' ' + kindBadge(a.type)).join('<br>') || '<span class="muted">—</span>') + '</td><td>' + busChip(k) + '</td><td>' + V.requests.filter((r) => r.studentId === k.id).length + '</td></tr>').join('') + '</table>';
   }).join('');
 }
 function schoolAuths(staff) {

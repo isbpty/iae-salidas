@@ -1,5 +1,5 @@
 import { listPersons, listAuthorizations, listRequests, listNotifications, listChat, getConversation, listRoutes, listTripsOn, listStaff } from '../db/repo.js';
-import { studentsOf, authorizedFor, todayOf } from '../domain/eligibility.js';
+import { studentsOf, authorizedFor, todayOf, withAuthExpiry } from '../domain/eligibility.js';
 import { withExpired } from '../domain/requests.js';
 
 export const publicPerson = ({ id, name, phone, cedula, relation, hasAccount, docName, docAttachmentId }) => ({ id, name, phone, cedula, relation, hasAccount, docName, docAttachmentId });
@@ -13,7 +13,7 @@ export async function parentView(ctx) {
   const ids = students.map((s) => s.id);
   const all = await listPersons(ctx.q);
   const byId = Object.fromEntries(all.map((p) => [p.id, p]));
-  const authorizations = await listAuthorizations(ctx.q, { studentIds: ids, includeRevoked: false });
+  const authorizations = withAuthExpiry(await listAuthorizations(ctx.q, { studentIds: ids, includeRevoked: false }), ctx);
   const requests = withExpired(await listRequests(ctx.q, { studentIds: ids }), todayOf(ctx));
   const wanted = new Set([me.id]);
   for (const s of students) for (const t of s.titulares) wanted.add(t);

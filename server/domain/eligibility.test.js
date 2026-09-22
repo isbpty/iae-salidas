@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeTestApp } from '../test-helpers.js';
 import { makeCtx } from './context.js';
-import { isAuthActive, pickupEligibility, pickupCandidates, authorizedFor } from './eligibility.js';
+import { isAuthActive, pickupEligibility, pickupCandidates, authorizedFor, withAuthExpiry, unaVezDefaultExpiry } from './eligibility.js';
 import { evaluateAutoApprove } from './autoapprove.js';
 
 /* Deviation from the brief: `t.db.tx((q) => makeCtx(q, ...))` returns a ctx whose `.q` is the
@@ -22,6 +22,24 @@ test('isAuthActive follows type, window, use and revocation', () => {
   assert.equal(isAuthActive({ type: 'temporal', validFrom: '2026-09-19', validTo: '2026-09-30' }, today), false);
   assert.equal(isAuthActive({ type: 'una_vez' }, today), true);
   assert.equal(isAuthActive({ type: 'una_vez', usedAt: 1 }, today), false);
+});
+
+test('withAuthExpiry attaches the resolved una_vez expiry so the client never redoes the date math itself', () => {
+  const ctx = { tz: 'America/Panama' };
+  const createdAt = new Date('2026-09-17T15:30:00Z').getTime(); // 2026-09-17 10:30 Panama
+  const list = [
+    { id: 'a1', type: 'siempre' },
+    { id: 'a3', type: 'temporal', validFrom: '2026-09-16', validTo: '2026-09-30' },
+    { id: 'a4', type: 'una_vez', createdAt, validTo: null },
+    { id: 'a5', type: 'una_vez', createdAt, validTo: '2026-09-19' },
+  ];
+  const out = withAuthExpiry(list, ctx);
+  assert.equal(out.find((a) => a.id === 'a1').expiresOn, undefined, 'siempre never carries an expiry');
+  assert.equal(out.find((a) => a.id === 'a3').expiresOn, undefined, 'temporal already has its own validTo, no expiresOn needed');
+  assert.equal(out.find((a) => a.id === 'a4').expiresOn, '2026-09-24', 'default: 7 days after createdAt, in the school timezone');
+  assert.equal(out.find((a) => a.id === 'a5').expiresOn, '2026-09-19', 'an explicit valid_to wins over the default');
+  assert.equal(unaVezDefaultExpiry({ createdAt }, 'America/Panama'), '2026-09-24');
+  assert.equal(unaVezDefaultExpiry({ createdAt: null }, 'America/Panama'), null);
 });
 
 test('eligibility distinguishes titular, authorized and strangers', async () => {

@@ -16,6 +16,10 @@ test('parent sees only the family, plus the directory of account holders', async
   assert.deepEqual(v.accounts.map((a) => a.id), ['p2', 'p5', 'p6', 'p7']);
   assert.ok(!('phone' in v.accounts[0]), 'directory has no phones');
   assert.deepEqual(v.authorizations.map((a) => a.id), ['a1', 'a2', 'a3', 'a4']);
+  const a4 = v.authorizations.find((a) => a.id === 'a4');
+  assert.equal(a4.expiresOn, '2026-09-24', 'a4 (una_vez, no explicit valid_to) carries its server-computed default expiry (school tz), not left for the client to compute');
+  assert.equal(v.authorizations.find((a) => a.id === 'a1').expiresOn, undefined, 'siempre never carries expiresOn');
+  assert.equal(v.authorizations.find((a) => a.id === 'a3').expiresOn, undefined, 'temporal already has its own validTo');
   assert.equal(v.requests.length, 0, 'the e3 request belongs to another family');
   assert.deepEqual(v.routes.map((r) => r.id), ['r1']);
   assert.equal(v.trips[0].boarded.e1.status, 'abordo');
@@ -70,6 +74,7 @@ test('teacher sees her grade, gate sees today approved salidas, monitor sees her
   assert.equal(rec.requests.length, 5);
   assert.ok(rec.audit.length > 0);
   assert.equal(rec.users, null);
+  assert.equal(rec.authorizations.find((a) => a.id === 'a4').expiresOn, '2026-09-24', 'the staff view resolves una_vez expiry too');
 
   const admin = await t.view('u_s1');
   assert.ok(admin.users.length >= 13);
