@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeTestApp } from '../test-helpers.js';
-import { listChat, getConversation, listRequests, listNotifications } from '../db/repo.js';
+import { listChat, getConversation, listRequests, listNotifications, patchRow, findTrip } from '../db/repo.js';
+import { todayISO, shiftISO } from '../domain/time.js';
 
 const lastBot = async (db, key) => (await listChat(db, key)).filter((m) => m.from === 'bot').at(-1);
 const say = (t, user, text, chatKey) => t.run('whatsapp_inbound', user, chatKey ? { text, chatKey } : { text });
@@ -255,6 +256,39 @@ test('a late "NO" on a proactive alert after the student already left points to 
   assert.match(m.text, /llama a recepción al \+507 6800-0000/);
   assert.match((await listNotifications(t.db, { role: 'recepcion' })).at(-1).text, /NO reconoce a Luis Rodríguez.*ya salió/);
   assert.equal(await getConversation(t.db, 'p1'), null);
+  await t.close();
+});
+
+test('resolvePickup (L14): a full name match resolves directly, a surname-only match on a name that was not asked for does not', async () => {
+  const t = await makeTestApp();
+  // "Hoy retira a Joseph Laura Gómez a las 2 pm": full first+last name match -> resolves straight to
+  // Laura Gómez (also a titular of Joseph) without asking, even though Ana Pérez, María Pérez and Luis
+  // Rodríguez are also candidates.
+  await say(t, 'u_p1', 'Hoy retira a Joseph Laura Gómez a las 2 pm');
+  assert.match((await lastBot(t.db, 'p1')).text, /• Retira: Laura Gómez/);
+  await say(t, 'u_p1', 'No'); // discard, don't actually create it
+
+  // "Carmen Gómez" shares a surname with titular Laura Gómez but is not her -- a lone surname match
+  // on a two-word hint used to be trusted anyway and silently picked Laura (L14). Now it must ask.
+  await say(t, 'u_p1', 'A Joseph lo retira Carmen Gómez a las 2 pm');
+  const ask = await lastBot(t.db, 'p1');
+  assert.match(ask.text, /^"carmen gomez" no aparece como persona autorizada para Joseph/);
+  assert.ok(!ask.buttons.includes('Laura Gómez (Mamá)'), 'not silently resolved to the wrong Gómez');
+  await t.close();
+});
+
+test('mark_no_bus via chat (L12): "mañana" registers the opt-out for tomorrow, not today, and a route with no monitora notifies Recepción instead of crashing', async () => {
+  const t = await makeTestApp();
+  await say(t, 'u_p1', 'Joseph mañana no va en el bus');
+  const tomorrow = shiftISO(t.clock.now, 'America/Panama', 1);
+  const today = todayISO(t.clock.now, 'America/Panama');
+  assert.match((await lastBot(t.db, 'p1')).text, /^🚌 Listo\. Avisé a la monitora Kenia Pérez que Joseph mañana no va en el Bus 12/);
+  assert.deepEqual((await findTrip(t.db, tomorrow, 'r1', 'ida')).noBus, ['e1']);
+  assert.equal(await findTrip(t.db, today, 'r1', 'ida'), null, "today's trip was never touched -- 'mañana' meant tomorrow, not this morning's leg");
+
+  await patchRow(t.db, 'routes', 'r1', { monitorStaffId: null });
+  await say(t, 'u_p1', 'Sofía hoy no va en el bus');
+  assert.match((await lastBot(t.db, 'p1')).text, /^🚌 Listo\. Avisé a Recepción \(la ruta no tiene monitora asignada\) que Sofía hoy no va en el Bus 12/);
   await t.close();
 });
 

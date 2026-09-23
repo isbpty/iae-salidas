@@ -35,13 +35,32 @@ function botMenu(ctx, p, kids) {
   const k = firstName(kids[0].name);
   return 'Hola ' + firstName(p.name) + ' 👋 Soy el asistente de ' + ctx.settings.school.short + ' Salidas.\n\nPuedo ayudarte con:\n1️⃣ Salida temprana: "Necesito retirar a ' + k + ' hoy a las 3:30 pm"\n2️⃣ Alguien más retira: "A ' + k + ' lo retira la abuela a las 2 pm"\n3️⃣ Excusa: "' + k + ' no irá mañana, tiene cita médica"\n4️⃣ Ubicación: "¿Dónde está ' + k + '?"\n5️⃣ Bus: "' + k + ' hoy no va en el bus"\n6️⃣ Escribe *estado* para ver tus solicitudes.';
 }
+/* Scores each candidate by how many hint words match their name (nombre+apellido outranks a lone
+   apellido, L14): a hint like "Carmen Gómez" used to grab "Laura Gómez" just because they share a
+   surname (`.some()` over any word, first hit wins). A full-name match is required before a
+   multi-word hint resolves automatically; a lone surname is only trusted when that's literally all
+   the hint offered (one word). A tie at the best score (several candidates matching equally well)
+   returns null so the caller asks instead of guessing. */
 async function resolvePickup(ctx, hint, studentId, requesterId, date) {
   if (!hint || hint === 'yo') return requesterId;
   const cands = await pickupCandidates(ctx, studentId, date);
-  const words = hint.split(' ');
-  let hit = cands.find((c) => words.some((w) => w.length > 2 && normalize(c.person.name).split(' ').includes(w)));
-  if (hit) return hit.person.id;
-  hit = cands.find((c) => words.some((w) => REL_WORDS[w] && normalize(c.person.relation) === normalize(REL_WORDS[w])));
+  const words = hint.split(' ').filter((w) => w.length > 2);
+  if (words.length) {
+    const scored = cands
+      .map((c) => ({ c, matched: words.filter((w) => normalize(c.person.name).split(' ').includes(w)).length }))
+      .filter((x) => x.matched > 0);
+    if (scored.length) {
+      const top = Math.max(...scored.map((x) => x.matched));
+      const full = top === words.length; // matched every word in the hint (nombre + apellido)
+      if (full || words.length === 1) {
+        const best = scored.filter((x) => x.matched === top);
+        return best.length === 1 ? best[0].c.person.id : null; // tie: ask instead of guessing
+      }
+      // A multi-word hint with only a partial (surname-only) match is too weak to guess -- fall
+      // through to the relation-word check below instead of picking the wrong person.
+    }
+  }
+  const hit = cands.find((c) => words.some((w) => REL_WORDS[w] && normalize(c.person.relation) === normalize(REL_WORDS[w])));
   return hit ? hit.person.id : null;
 }
 const candidateLabels = (cands, p) => cands.map((c) => (c.person.id === p.id ? 'Yo' : firstName(c.person.name) + ' (' + c.person.relation + ')'));
@@ -130,18 +149,30 @@ async function finishDonde(ctx, key, p, sid) {
   return reply(ctx, key, w.text, null, w.location ? { location: w.location } : {});
 }
 async function startNoBus(ctx, key, p, kids, n) {
-  const legs = /manana|ida/.test(n) && !/tarde|vuelta|regreso/.test(n) ? ['ida'] : /tarde|vuelta|regreso/.test(n) && !/manana|ida/.test(n) ? ['vuelta'] : ['ida', 'vuelta'];
+  // "mañana" is ambiguous ("tomorrow" vs "in the morning") -- leg comes only from explicit "ida" or a
+  // "de/en la mañana" time-of-day phrase, never from a bare "mañana" (that's the date, via parseDate,
+  // fixed for this same ambiguity in nlp.js). Otherwise "Joseph mañana no va en el bus" used to be
+  // read as the ida leg of *today* instead of both legs of tomorrow (L12).
+  const morning = /\bida\b/.test(n) || /\b(en|de)\s+la\s+manana\b/.test(n);
+  const afternoon = /tarde|vuelta|regreso/.test(n);
+  const legs = morning && !afternoon ? ['ida'] : afternoon && !morning ? ['vuelta'] : ['ida', 'vuelta'];
+  const date = parseDate(n, ctx);
   const sid = matchKid(n, kids);
-  if (!sid) { await setState(ctx, key, { step: 'ask_child', draft: { kind: 'nobus', legs } }); return reply(ctx, key, '¿Cuál de tus hijos no va en el bus hoy?', kids.map((k) => firstName(k.name))); }
-  return finishNoBus(ctx, key, p, { studentId: sid, legs });
+  if (!sid) { await setState(ctx, key, { step: 'ask_child', draft: { kind: 'nobus', legs, date } }); return reply(ctx, key, '¿Cuál de tus hijos no va en el bus?', kids.map((k) => firstName(k.name))); }
+  return finishNoBus(ctx, key, p, { studentId: sid, legs, date });
 }
 async function finishNoBus(ctx, key, p, d) {
   const st = await getStudent(ctx.q, d.studentId);
   if (!st.routeId) return reply(ctx, key, firstName(st.name) + ' no tiene ruta de bus registrada. Puedes asignarla en la app.');
-  await markNoBus(ctx, d.studentId, p.id, d.legs);
-  const r = await getRoute(ctx.q, st.routeId);
-  const mon = await getStaff(ctx.q, r.monitorId);
-  return reply(ctx, key, '🚌 Listo. Avisé a la monitora ' + mon.name + ' que ' + firstName(st.name) + ' hoy no va en el ' + r.name + ' (' + d.legs.map((l) => LEG_NAMES[l]).join(' y ') + ').');
+  const date = d.date || todayISO(ctx.now, ctx.tz);
+  const { route: r, alreadyRegistered } = await markNoBus(ctx, d.studentId, p.id, d.legs, date);
+  const when = fmtDate(ctx, date);
+  const legsTxt = d.legs.map((l) => LEG_NAMES[l]).join(' y ');
+  if (alreadyRegistered) return reply(ctx, key, 'Ya tenía registrado que ' + firstName(st.name) + ' ' + when + ' no va en el ' + r.name + ' (' + legsTxt + ').');
+  // A route with no monitora assigned used to crash here (getStaff(null).name, 500, L12) -- Recepción
+  // is notified instead so the family still gets confirmation the opt-out was registered.
+  const who = r.monitorId ? 'Avisé a la monitora ' + (await getStaff(ctx.q, r.monitorId)).name : 'Avisé a Recepción (la ruta no tiene monitora asignada)';
+  return reply(ctx, key, '🚌 Listo. ' + who + ' que ' + firstName(st.name) + ' ' + when + ' no va en el ' + r.name + ' (' + legsTxt + ').');
 }
 
 /* Ends the current interactive step. If the titular has a proactive alert queued behind it (L9: a

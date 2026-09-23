@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeTestApp } from '../test-helpers.js';
 import { listNotifications, findTrip, getSettings, saveSettings } from '../db/repo.js';
+import { todayISO, shiftISO } from '../domain/time.js';
 
 const texts = async (db, target) => (await listNotifications(db, target)).map((n) => n.text);
 
@@ -58,5 +59,24 @@ test('monitor scope, trip status and validation', async () => {
   assert.ok(result.endedAt);
   const { result: admin } = await t.run('set_trip_status', 'u_s1', { routeId: 'r2', leg: 'vuelta', status: 'en_ruta' });
   assert.equal(admin.status, 'en_ruta');
+  await t.close();
+});
+
+test('mark_no_bus/undo_no_bus (L12): accept hoy/mañana, reject any other date, and undo_no_bus reverses the opt-out', async () => {
+  const t = await makeTestApp();
+  const today = todayISO(t.clock.now, 'America/Panama');
+  const tomorrow = shiftISO(t.clock.now, 'America/Panama', 1);
+
+  await assert.rejects(t.run('mark_no_bus', 'u_p1', { studentId: 'e1', date: '2026-01-01' }), /invalid_date/);
+  const { result: r1 } = await t.run('mark_no_bus', 'u_p1', { studentId: 'e1', legs: ['ida'], date: tomorrow });
+  assert.equal(r1.date, tomorrow);
+  assert.deepEqual((await findTrip(t.db, tomorrow, 'r1', 'ida')).noBus, ['e1']);
+  assert.equal(await findTrip(t.db, today, 'r1', 'ida'), null, "today's ida trip was never touched");
+
+  await assert.rejects(t.run('undo_no_bus', 'u_p1', { studentId: 'e1', legs: ['ida'], date: '2026-01-01' }), /invalid_date/);
+  await assert.rejects(t.run('undo_no_bus', 'u_p7', { studentId: 'e1', legs: ['ida'], date: tomorrow }), /forbidden_not_titular/);
+  const { result: r2 } = await t.run('undo_no_bus', 'u_p1', { studentId: 'e1', legs: ['ida'], date: tomorrow });
+  assert.equal(r2.removed, true);
+  assert.deepEqual((await findTrip(t.db, tomorrow, 'r1', 'ida')).noBus, []);
   await t.close();
 });
