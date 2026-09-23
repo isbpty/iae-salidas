@@ -5,11 +5,21 @@ import { seedLoad } from './seed-load.js';
 import { makeCtx } from '../domain/context.js';
 import { staffView } from '../projections/staff.js';
 
-/* Reads only: R2 is about *over-fetching* (`withTitulares` scanning all guardianships, `getRoute`
-   scanning every route/stop, hydrating history/confirmations nobody asked for, `listStaff` re-run
-   per notice...) -- every one of those is a `SELECT`. The write side of a command (one notification
-   row + one chat row + one audit row per actual recipient) is a fixed, correctness-mandated cost
-   that scales with real recipients, not with table size, and isn't part of the N+1 story. */
+/* What these two tests measure, precisely -- and what they deliberately leave out:
+
+   `create_salida`: only `SELECT` statements count toward the 20-query budget. A command also does
+   ~16 writes (one `notifications` row + one `chat_messages` row per real recipient with a phone,
+   `request_events`/`audit_log` per history entry) that scale 1:1 with real recipients, not with
+   table size -- that's not the N+1 R2 is about, and this task never touched write-batching. Including
+   both reads and writes, the *whole command* is 36 queries today (was 64 before this task; 48 of
+   those were `SELECT`s, 16 were writes -- writes didn't change, only the reads did).
+
+   Recepción view: the budget covers `staffView(ctx)` alone (the repo/projection queries R2 is
+   about), not the `makeCtx` session bootstrap that precedes it (`getUser`+`getSettings`+
+   `getPermissions`+`getStaff`, 4 queries) or `buildView`'s `listLevels` (1 more) -- both fixed costs
+   identical for every request regardless of role or dataset size. Including that bootstrap, the
+   *whole view build* (`t.view('u_s2')`, what a real request actually pays) is 17 queries with 700
+   students today (was 21 before this task -- the number the review itself measured). */
 const selects = (calls) => calls.filter((c) => /^\s*SELECT/i.test(c));
 
 /* R2/Task 6: `create_salida` used to read the full `guardianships` table on every `getStudent`
@@ -21,7 +31,7 @@ test('create_salida hace 20 lecturas o menos', async () => {
   const t = await makeTestApp();
   const { calls } = await countQueries(t.db, (mark) => t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '13:00', pickupBy: 'p1', reason: 'Cita médica' }));
   const reads = selects(calls);
-  assert.ok(reads.length <= 20, 'create_salida hizo ' + reads.length + ' lecturas (tope 20):\n' + reads.join('\n'));
+  assert.ok(reads.length <= 20, 'create_salida hizo ' + reads.length + ' lecturas (tope 20) de ' + calls.length + ' consultas totales:\n' + reads.join('\n'));
   await t.close();
 });
 

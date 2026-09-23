@@ -29,8 +29,8 @@ test('bootstrap no toma el lock ni re-siembra en una instancia tibia', async () 
   assert.ok(before > 0, 'the cold bootstrap seeded demo users');
 
   const { count, calls } = await countQueries(db, () => bootstrap(db, env));
-  assert.ok(!calls.some((s) => /INSERT|UPDATE|DELETE/i.test(s)), 'a warm bootstrap writes nothing:\n' + calls.join('\n'));
-  assert.ok(count <= 2, 'a warm bootstrap is one or two un-locked reads, not a migrate+seed pass: ' + count + '\n' + calls.join('\n'));
+  assert.ok(!calls.some((s) => /INSERT|UPDATE|DELETE|CREATE|ALTER/i.test(s)), 'a warm bootstrap writes and runs no DDL:\n' + calls.join('\n'));
+  assert.ok(count <= 3, 'a warm bootstrap is a couple of un-locked reads (to_regclass, applied versions, seed check), not a migrate+seed pass: ' + count + '\n' + calls.join('\n'));
   const after = (await db.query('SELECT count(*)::int AS c FROM users'))[0].c;
   assert.equal(after, before, 'nothing got re-seeded');
   await db.close();

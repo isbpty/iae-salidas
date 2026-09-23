@@ -59,11 +59,13 @@ export async function loginSuper(base, pin, key = CONFIG.superKey) {
   return r.headers.get('set-cookie').split(';')[0];
 }
 
-/* Counts every SQL statement `fn` causes on `db`, whether it runs through the top-level `db.query`
-   (outside a transaction) or through `q.query` inside a `db.tx(...)` block (every command and view
-   build runs in a transaction, so this is the path that matters for N+1 counting -- see R2/Task 6).
-   Restores the originals in a `finally` so a failing assertion never leaves `db` patched for the
-   next test.
+/* Counts every SQL statement `fn` causes on `db`, whether it runs through the top-level `db.query`/
+   `db.exec` (outside a transaction) or through `q.query`/`q.exec` inside a `db.tx(...)` block (every
+   command and view build runs in a transaction, so this is the path that matters for N+1 counting --
+   see R2/Task 6). `exec` is wrapped too -- not just `query` -- so a DDL statement (`CREATE TABLE
+   IF NOT EXISTS …`, run via `exec`, not `query`) is not invisible to a "this does no writes" assertion
+   (R5's `bootstrap`). Restores the originals in a `finally` so a failing assertion never leaves `db`
+   patched for the next test.
    `fn` receives a `mark()` function that clears the log collected so far -- a budget on "the
    Recepción view" or "one command" is about the repo/projection queries R2 is about, not the fixed
    `makeCtx` session bootstrap (getUser/getSettings/getPermissions/getStaff, identical for every
@@ -72,15 +74,18 @@ export async function loginSuper(base, pin, key = CONFIG.superKey) {
 export async function countQueries(db, fn) {
   const calls = [];
   const origQuery = db.query;
+  const origExec = db.exec;
   const origTx = db.tx;
   const mark = () => { calls.length = 0; };
   db.query = (sql, params) => { calls.push(sql); return origQuery(sql, params); };
-  db.tx = (txFn) => origTx((q) => txFn({ ...q, query: (sql, params) => { calls.push(sql); return q.query(sql, params); } }));
+  db.exec = (sql) => { calls.push(sql); return origExec(sql); };
+  db.tx = (txFn) => origTx((q) => txFn({ ...q, query: (sql, params) => { calls.push(sql); return q.query(sql, params); }, exec: (sql) => { calls.push(sql); return q.exec(sql); } }));
   try {
     const result = await fn(mark);
     return { result, count: calls.length, calls };
   } finally {
     db.query = origQuery;
+    db.exec = origExec;
     db.tx = origTx;
   }
 }
