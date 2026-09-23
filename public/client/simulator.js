@@ -173,7 +173,7 @@ const SIM_SCRIPT = [
   { title: 'La monitora del bus', run: async () => {
     await S.as('u_s7'); await S.view('school', 'rutas');
     await S.say('Kenia solo ve el Bus 12 y marca quién abordó o bajó.');
-    await S.click(inCard('.route-card', /Sofía/, '[data-action=board][data-status=abordo]'), 'el botón Abordó'); await S.settle();
+    await S.click(inCard('.route-card tr', /Sofía/, '[data-action=board][data-status=abordo]'), 'el botón Abordó'); await S.settle();
     await S.as('u_p1'); await S.view('whatsapp');
     await S.chip(/hoy no va en el bus/); await S.settle();
     await S.say('"Hoy no va en bus" le llega a la monitora al instante.');
