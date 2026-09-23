@@ -158,21 +158,49 @@ CREATE TABLE IF NOT EXISTS notification_reads (
        schema itself, so a bug or a direct write could still land garbage in the table. Same for the
        "who" columns on `requests`/`notifications`/`trip_boardings`: nothing stopped a stale or
        mistyped id from being stored, which is exactly what produced the null-unsafe `.name` accesses
-       C3 fixes at the call sites. Every constraint is added `NOT VALID` then `VALIDATE CONSTRAINT` in
-       the same migration -- `NOT VALID` takes only a quick lock and does not scan/lock existing rows
-       while adding the constraint, `VALIDATE CONSTRAINT` then scans and checks them (also without a
-       blocking exclusive lock held throughout) -- so this never risks failing out or locking up on
-       the demo data already in a live database. All five referenced tables (`persons`, `staff`,
-       `students`, `requests`, `notifications`, `trip_boardings`) are already in `MOVEMENT_TABLES`
-       (see server/db/seed.js), so `resetAll`'s single combined `TRUNCATE ... CASCADE` keeps wiping
-       and reloading them together exactly as before -- these FKs default to `ON DELETE RESTRICT`
-       (nothing in the app ever deletes a person/staff/student row outside of that reset). */
+       C3 fixes at the call sites.
+
+       This runs on `bootstrap` on every cold start (server/db/migrate.js), including against the
+       live Neon database, which already has rows written by code that predates every one of these
+       constraints -- notably `decided_by = 'auto'` for every auto-approved salida (a sentinel, not a
+       staff id) and, after however many `seed_load`/`reset_demo` cycles ran before today, possibly
+       other dangling `pickup_by`/`requested_by`/`person_id`/`staff_id`/`student_id` values. Cleaning
+       that up is not optional here: a `VALIDATE CONSTRAINT` that fails aborts the whole migration
+       transaction, and since bootstrap runs unconditionally, that takes the entire app down (503 for
+       everyone) until someone fixes the data by hand. So every FK is preceded by an `UPDATE`/`DELETE`
+       that repairs exactly the rows that would fail it -- `NULL` out `decided_by`/`pickup_by` (both
+       optional columns; the row itself is still meaningful without them) and `DELETE` the handful of
+       rows where the FK'd id is not optional (`requested_by`, `trip_boardings.student_id`) or where
+       "no valid person/staff" makes the whole notification meaningless. `request_events`/
+       `pickup_confirmations` are `ON DELETE CASCADE` on `requests.id` (see their CREATE TABLE above),
+       so deleting an orphaned request takes its history/confirmation with it instead of leaving
+       either behind. Only after that cleanup does each FK go `NOT VALID` + `VALIDATE CONSTRAINT` --
+       `NOT VALID` takes only a quick lock and does not scan/lock existing rows while adding the
+       constraint, `VALIDATE CONSTRAINT` then scans and checks them (also without a blocking exclusive
+       lock held throughout), and by that point every row satisfies it.
+
+       The two `date`/`time` CHECKs are added `NOT VALID` and deliberately left unvalidated: unlike
+       the FKs above, a malformed `date`/`time` on an old row is not safe to silently repair (there is
+       no correct value to fall back to, and the row still needs to display/print correctly), and it
+       is not safe to delete a request just because its date string is malformed either. `NOT VALID`
+       without `VALIDATE CONSTRAINT` still does exactly what C2 needs going forward -- every future
+       INSERT/UPDATE is checked -- without ever scanning historical rows or risking the migration
+       (and therefore bootstrap, and therefore the whole app) on data this migration cannot safely fix.
+
+       All five referenced tables (`persons`, `staff`, `students`, `requests`, `notifications`,
+       `trip_boardings`) are already in `MOVEMENT_TABLES` (see server/db/seed.js), so `resetAll`'s
+       single combined `TRUNCATE ... CASCADE` keeps wiping and reloading them together exactly as
+       before -- these FKs default to `ON DELETE RESTRICT` (nothing in the app ever deletes a
+       person/staff/student row outside of that reset). */
     version: '012_integrity',
     sql: `
+UPDATE requests SET decided_by = NULL WHERE decided_by IS NOT NULL AND decided_by NOT IN (SELECT id FROM staff);
+UPDATE requests SET pickup_by = NULL WHERE pickup_by IS NOT NULL AND pickup_by NOT IN (SELECT id FROM persons);
+DELETE FROM requests WHERE requested_by NOT IN (SELECT id FROM persons);
+DELETE FROM notifications WHERE (person_id IS NOT NULL AND person_id NOT IN (SELECT id FROM persons)) OR (staff_id IS NOT NULL AND staff_id NOT IN (SELECT id FROM staff));
+DELETE FROM trip_boardings WHERE student_id NOT IN (SELECT id FROM students);
 ALTER TABLE requests ADD CONSTRAINT requests_date_format CHECK (date ~ '^\\d{4}-\\d{2}-\\d{2}$' AND date::date IS NOT NULL) NOT VALID;
-ALTER TABLE requests VALIDATE CONSTRAINT requests_date_format;
 ALTER TABLE requests ADD CONSTRAINT requests_time_format CHECK (time ~ '^\\d{2}:\\d{2}$') NOT VALID;
-ALTER TABLE requests VALIDATE CONSTRAINT requests_time_format;
 ALTER TABLE requests ADD CONSTRAINT requests_requested_by_fkey FOREIGN KEY (requested_by) REFERENCES persons(id) NOT VALID;
 ALTER TABLE requests VALIDATE CONSTRAINT requests_requested_by_fkey;
 ALTER TABLE requests ADD CONSTRAINT requests_pickup_by_fkey FOREIGN KEY (pickup_by) REFERENCES persons(id) NOT VALID;
