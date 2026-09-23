@@ -32,7 +32,7 @@ const api = (() => {
     const res = await fetch(path, { ...opts, headers: { 'content-type': 'application/json', ...(opts.headers || {}) } });
     if (res.status === 304) return { notModified: true };
     const value = await res.json().catch(() => ({}));
-    if (!res.ok) { const e = new Error(value.message || value.error || String(res.status)); e.status = res.status; e.code = value.error; throw e; }
+    if (!res.ok) { const e = new Error(value.message || value.error || String(res.status)); e.status = res.status; e.code = value.error; e.body = value; throw e; }
     return value;
   }
   function shrinkImage(dataUrl) {

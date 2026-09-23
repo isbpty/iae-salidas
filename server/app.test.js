@@ -50,6 +50,48 @@ test('static serving is limited to index.html and client/', async () => {
   await close(); await t.close();
 });
 
+/* S11: mismo CSP para las páginas HTML que vercel.json manda en producción -- solo con text/html, nunca
+   con los estáticos JS/CSS (la CSP en esos no significaría nada y podría confundir). */
+test('S11: CSP en las páginas HTML, no en los estáticos', async () => {
+  const t = await makeTestApp(); const { base, close } = await t.listen();
+  const index = await call(base, '/');
+  assert.equal(index.status, 200);
+  const csp = index.headers.get('content-security-policy');
+  assert.match(csp, /default-src 'self'/);
+  assert.match(csp, /script-src 'self' https:\/\/cdnjs\.cloudflare\.com/);
+  assert.match(csp, /style-src 'self' 'unsafe-inline'/);
+  assert.match(csp, /img-src 'self' data: blob:/);
+  assert.match(csp, /connect-src 'self'/);
+  assert.match(csp, /worker-src 'self'/);
+  assert.match(csp, /manifest-src 'self'/);
+  assert.match(csp, /frame-ancestors 'none'/);
+  const superPage = await call(base, '/super');
+  assert.equal(superPage.status, 200);
+  assert.ok(superPage.headers.get('content-security-policy'), '/super lleva la misma cabecera');
+  const script = await call(base, '/client/api.js');
+  assert.equal(script.status, 200);
+  assert.equal(script.headers.get('content-security-policy'), null, 'un .js no lleva CSP: no es un documento');
+  await close(); await t.close();
+});
+
+/* S9: un PDF no se ve embebido con la CSP `sandbox` del adjunto (Chrome lo descarga inerte en vez de
+   mostrarlo); se sirve como descarga. Las imágenes siguen `inline`. */
+test('S9: un PDF se sirve con Content-Disposition: attachment', async () => {
+  const t = await makeTestApp(); const { base, close } = await t.listen();
+  const cookie = await loginAs(base, 'u_p1');
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+  const pdfBytes = Buffer.from('%PDF-1.4 minimal').toString('base64');
+  const up = await call(base, '/api/commands/upload_attachment', { method: 'POST', cookie, body: { purpose: 'certificado', mime: 'application/pdf', name: 'reporte.pdf', dataBase64: pdfBytes } });
+  assert.equal(up.status, 200);
+  const pdf = await call(base, '/api/attachments/' + up.json.result.attachmentId, { cookie });
+  assert.equal(pdf.status, 200);
+  assert.match(pdf.headers.get('content-disposition'), /^attachment; filename="reporte\.pdf"$/);
+  const upImg = await call(base, '/api/commands/upload_attachment', { method: 'POST', cookie, body: { purpose: 'foto', mime: 'image/png', name: 'foto.png', dataBase64: png } });
+  const img = await call(base, '/api/attachments/' + upImg.json.result.attachmentId, { cookie });
+  assert.match(img.headers.get('content-disposition'), /^inline;/, 'una imagen sigue sirviéndose inline');
+  await close(); await t.close();
+});
+
 test('a spoofed X-Forwarded-For cannot walk around the login limit', async () => {
   const t = await makeTestApp(); const { base, close } = await t.listen();
   const attempt = (userId, ip, pin = 'no') => call(base, '/api/auth/login', { method: 'POST', body: { userId, pin }, headers: { 'x-forwarded-for': ip } });

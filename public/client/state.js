@@ -42,7 +42,7 @@ async function refresh() {
   } catch (e) { if (e.status === 401) { showLogin(); return false; } setBadge('sin conexión'); return false; }
 }
 /* Errores que el servidor manda en snake_case y merecen una frase propia. */
-const ERROR_TEXTS = { demo_only: 'Función solo del modo demo', too_many_attempts: 'Demasiados intentos. Espera 15 minutos.' };
+const ERROR_TEXTS = { demo_only: 'Función solo del modo demo', too_many_attempts: 'Demasiados intentos. Espera 15 minutos.', simulator_busy: 'Otro probador está corriendo el simulador ahora mismo. Espera un momento e inténtalo de nuevo.' };
 function errorText(e) { return ERROR_TEXTS[e.code] || 'No se pudo guardar: ' + e.message; }
 /* Ejecuta un comando y adopta la vista que devuelve. Lanza el error para que quien llama no siga. */
 async function apply(name, input) {

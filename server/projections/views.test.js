@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeTestApp, call, loginAs } from '../test-helpers.js';
-import { insertRow, insertNotification } from '../db/repo.js';
+import { insertRow, insertNotification, getUser, getAttachment } from '../db/repo.js';
+import { canSeeAttachment } from './access.js';
 
 test('parent sees only the family, never a directory of account holders', async () => {
   const t = await makeTestApp();
@@ -191,5 +192,43 @@ test('a parent learns nothing new about an account holder they authorize', async
   assert.equal(carlos.persons.p3.cedula, '8-200-111', 'the grandmother he authorized, who has no account');
   assert.equal(carlos.persons.p2.cedula, '8-702-456', 'his co-titular');
   assert.ok(!('cedula' in carlos.persons.p5), 'Laura has her own account and her own family');
+  await t.close();
+});
+
+/* S9: canSeeAttachment por entidad, no por dueño (Task 11).
+   - Garita solo abre cédula/foto que es el documento de quien retira hoy -- nunca un certificado, aunque
+     esté vinculado al mismo `doc_attachment_id`.
+   - Un padre ve la excusa de su propio hijo (por la solicitud, no por quién subió el archivo) y el
+     documento de alguien que él mismo autorizó, pero no el de un autorizado de otra familia ni un
+     certificado ajeno sin vínculo. */
+test('S9: acceso a adjuntos por entidad (garita, padres)', async () => {
+  const t = await makeTestApp();
+  await t.db.tx(async (q) => {
+    await insertRow(q, 'attachments', { id: 'att_cert_p3', ownerPersonId: 'p3', purpose: 'certificado', mime: 'image/svg+xml', bytes: Buffer.from('x'), size: 1, name: 'cert.svg' });
+    await q.query('UPDATE persons SET doc_attachment_id=$1 WHERE id=$2', ['att_cert_p3', 'p3']);
+  });
+  await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '13:00', pickupBy: 'p3', reason: 'x' });
+  const gate = await t.db.tx((q) => getUser(q, 'u_s6'));
+  const cert = await t.db.tx((q) => getAttachment(q, 'att_cert_p3'));
+  const env = { now: t.clock.now };
+  assert.equal(await t.db.tx((q) => canSeeAttachment(q, gate, cert, env)), false, 'un certificado nunca se abre en garita, aunque esté vinculado como doc_attachment_id de quien retira hoy');
+  /* Original photo of the same pickup person, still linked as her doc, is fine. */
+  const foto = await t.db.tx((q) => getAttachment(q, 'att_p3'));
+  await t.db.tx((q) => q.query('UPDATE persons SET doc_attachment_id=$1 WHERE id=$2', ['att_p3', 'p3']));
+  assert.equal(await t.db.tx((q) => canSeeAttachment(q, gate, foto, env)), true, 'cédula/foto de quien retira hoy sí se abre en garita');
+
+  /* Excusa: se comprueba por la solicitud (kind='excusa'), no por quién subió el adjunto -- el propio
+     padre lo sube y lo adjunta a la excusa de su hijo. */
+  await t.db.tx((q) => insertRow(q, 'attachments', { id: 'att_excusa_e1', ownerPersonId: 'p1', purpose: 'certificado', mime: 'image/svg+xml', bytes: Buffer.from('x'), size: 1, name: 'cert.svg' }));
+  const excusa = await t.run('create_excusa', 'u_p1', { studentId: 'e1', date: '2026-09-18', excusaType: 'ausencia', reason: 'gripe', attachmentId: 'att_excusa_e1', attachmentName: 'cert' });
+  const excusaAtt = await t.db.tx((q) => getAttachment(q, 'att_excusa_e1'));
+  const p1 = await t.db.tx((q) => getUser(q, 'u_p1'));
+  const p7 = await t.db.tx((q) => getUser(q, 'u_p7'));
+  assert.equal(await t.db.tx((q) => canSeeAttachment(q, p1, excusaAtt, env)), true, 'el padre ve la excusa de su propio hijo');
+  assert.equal(await t.db.tx((q) => canSeeAttachment(q, p7, excusaAtt, env)), false, 'otra familia no ve esa excusa');
+  assert.equal(excusa.result.status !== undefined, true);
+  /* `cert` ya no es el documento de nadie (se revirtió doc_attachment_id arriba) ni la excusa de un
+     hijo propio: ni por ser el dueño, ni por entidad, se abre. */
+  assert.equal(await t.db.tx((q) => canSeeAttachment(q, p1, cert, env)), false, 'un adjunto sin vínculo vigente no se abre');
   await t.close();
 });

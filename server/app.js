@@ -12,10 +12,16 @@ import { classify, maskInput, recordServerEvent, ingestClientEvents, clientInfo,
 import { runCommand } from './commands/run.js';
 import { buildView } from './projections/index.js';
 import { canSeeAttachment } from './projections/access.js';
+import { deleteOrphanAttachments } from './commands/attachments.js';
 import { pushEnabled, cleanSubscription, saveSubscription, removeSubscription, subscriptionCounts, sendTestNotice, alertTesterLogin } from './push.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.webmanifest': 'application/manifest+json; charset=utf-8' };
+/* S11: mismo CSP que vercel.json (que sirve los estáticos en producción) para que un servidor local o de
+   pruebas responda igual. `style-src 'unsafe-inline'` porque las páginas usan atributos `style="…"` en
+   línea; `img-src … blob:` por los QR dibujados en <canvas>/data URL; `worker-src` por el service worker
+   de /super; solo se manda con páginas HTML, nunca con JS/CSS/JSON. */
+const CSP = "default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'";
 
 /* R7: activity_events (una fila por petición no-304 más los lotes de telemetría) y audit_log (una fila por
    comando) crecen sin límite si nadie entra a /super y pulsa "Purgar" a mano. Cada carga del resumen de
@@ -25,6 +31,9 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; cha
 const AUTO_PURGE_COOLDOWN_S = 3600;
 const ACTIVITY_RETENTION_DAYS = 30;
 const AUDIT_RETENTION_DAYS = 180;
+/* S9: mismo camino que la purga de actividad -- los adjuntos huérfanos (nunca vinculados a una
+   solicitud ni al documento de una persona) de más de 24 h se borran aquí, sin comando ni cron aparte. */
+const ORPHAN_ATTACHMENT_HOURS = 24;
 async function claimAutoPurge(db, now) {
   const t = Math.floor(now.getTime() / 1000);
   const r = await db.query(`INSERT INTO app_meta(id, value) VALUES ('auto_purge_activity', $1)
@@ -36,6 +45,7 @@ async function autoPurgeOldActivity(db, now) {
   try {
     await purgeActivity(db, new Date(now.getTime() - ACTIVITY_RETENTION_DAYS * 86400000));
     await db.query('DELETE FROM audit_log WHERE at < $1', [new Date(now.getTime() - AUDIT_RETENTION_DAYS * 86400000).toISOString()]);
+    await deleteOrphanAttachments(db, new Date(now.getTime() - ORPHAN_ATTACHMENT_HOURS * 3600000));
   } catch (e) { console.error('purga automática de actividad/auditoría falló:', e.message); }
 }
 
@@ -290,8 +300,9 @@ export function createApp(deps) {
         if (path === 'super/purge') {
           const days = Math.min(3650, Math.max(0, Math.round(Number(input.beforeDays)) || 30));
           const deleted = await purgeActivity(db, new Date(now.getTime() - days * 86400000));
-          await audit('Borró ' + deleted + ' eventos de actividad anteriores a ' + days + ' días');
-          return json(res, 200, { deleted });
+          const orphans = await deleteOrphanAttachments(db, new Date(now.getTime() - ORPHAN_ATTACHMENT_HOURS * 3600000));
+          await audit('Borró ' + deleted + ' eventos de actividad anteriores a ' + days + ' días y ' + orphans + ' adjuntos huérfanos');
+          return json(res, 200, { deleted, orphans });
         }
       }
       return json(res, 404, { error: 'not_found' });
@@ -345,13 +356,17 @@ export function createApp(deps) {
       if (!att) return json(res, 404, { error: 'not_found' });
       if (!(await db.tx((q) => canSeeAttachment(q, user, att, env())))) return json(res, 403, { error: 'forbidden_attachment' });
       const filename = String(att.name || 'adjunto').replace(/[^A-Za-z0-9._-]/g, '_');
+      /* S9: un PDF no se ve embebido con la CSP `sandbox` de abajo (Chrome lo descarga en vez de mostrarlo
+         inerte); servirlo directamente como descarga es más claro que un visor roto. Las imágenes siguen
+         `inline` para la vista previa en garita/padres. */
+      const disposition = att.mime === 'application/pdf' ? 'attachment' : 'inline';
       res.writeHead(200, {
         'content-type': att.mime,
         'cache-control': 'private, max-age=300',
         'content-length': att.size,
         'x-content-type-options': 'nosniff',
         'content-security-policy': "default-src 'none'; sandbox",
-        'content-disposition': `inline; filename="${filename}"`,
+        'content-disposition': `${disposition}; filename="${filename}"`,
       });
       return res.end(Buffer.from(att.bytes));
     }
@@ -391,7 +406,7 @@ export function createApp(deps) {
       /* Weak ETag over the bytes: cheap to compute, lets a browser (or vercel.json's own `no-cache`) skip the
          download when nothing changed instead of re-fetching the whole file on every page load (R6). */
       const etag = 'W/"' + createHash('sha1').update(data).digest('hex').slice(0, 16) + '"';
-      const extra = pathname === '/super-sw.js' ? { 'service-worker-allowed': '/' } : {};
+      const extra = { ...(pathname === '/super-sw.js' ? { 'service-worker-allowed': '/' } : {}), ...(extname(file) === '.html' ? { 'content-security-policy': CSP } : {}) };
       if (req.headers['if-none-match'] === etag) { res.writeHead(304, { etag, 'cache-control': 'no-cache', ...extra }); return res.end(); }
       res.writeHead(200, { 'content-type': MIME[extname(file)] || 'application/octet-stream', 'cache-control': 'no-cache', etag, ...extra });
       res.end(data);
@@ -439,7 +454,7 @@ export function createApp(deps) {
       const status = e.status || (e instanceof SyntaxError ? 400 : 500);
       act.error = status === 500 ? 'internal_error' : e.code || e.message;
       if (status === 500) { console.error(e); return json(res, 500, { error: 'internal_error', message: null }); }
-      return json(res, status, { error: e.code || e.message, message: e.detail || null });
+      return json(res, status, { error: e.code || e.message, message: e.detail || null, ...(e.extra || {}) });
     } finally {
       if (isApi) { if (!act.error && res.statusCode >= 400) act.error = res.errorCode || null; await recordRequest(req, path, act, startedAt, startedMs, res); }
     }

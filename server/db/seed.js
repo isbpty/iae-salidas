@@ -64,7 +64,11 @@ export async function seedDemo(q, { now, tz }) {
   ];
   for (const p of persons) {
     const bytes = svgDoc(p.docName.startsWith('foto') ? 'Foto' : 'Cédula', p.name);
-    await insertRow(q, 'attachments', { id: 'att_' + p.id, ownerPersonId: p.id, purpose: p.docName.startsWith('foto') ? 'foto' : 'cedula', mime: 'image/svg+xml', bytes, size: bytes.length, name: p.docName });
+    /* S9: `createdAt` explícito (como en `authorizations`/`requests` más abajo) y no el `now()` real de
+       la base -- si no, la cuota diaria y la limpieza de huérfanos (ambas contra `attachments.created_at`,
+       Task 11) contarían estos documentos del seed como "de hoy" cada vez que la prueba corre un día
+       distinto al `now` simulado. */
+    await insertRow(q, 'attachments', { id: 'att_' + p.id, ownerPersonId: p.id, purpose: p.docName.startsWith('foto') ? 'foto' : 'cedula', mime: 'image/svg+xml', bytes, size: bytes.length, name: p.docName, createdAt: at(T - 40 * 24 * H) });
     await insertRow(q, 'persons', { ...p, docAttachmentId: 'att_' + p.id });
   }
 

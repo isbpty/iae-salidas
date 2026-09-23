@@ -1,6 +1,7 @@
-/* `code` is the machine-readable snake_case error; `detail` is an optional Spanish sentence for the UI. */
+/* `code` is the machine-readable snake_case error; `detail` is an optional Spanish sentence for the UI;
+   `extra` (L18: `{ until }` on `simulator_busy`) is merged into the JSON error body by server/app.js. */
 export class HttpError extends Error {
-  constructor(status, code, detail = null) { super(code); this.status = status; this.code = code; this.detail = detail; }
+  constructor(status, code, detail = null, extra = null) { super(code); this.status = status; this.code = code; this.detail = detail; this.extra = extra; }
 }
 export const badRequest = (code) => { throw new HttpError(400, code); };
 export const unauthorized = (code = 'authentication_required') => { throw new HttpError(401, code); };

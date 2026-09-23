@@ -253,6 +253,12 @@ async function simStart() {
   /* Reservar la instancia antes del diálogo y del reinicio: un segundo clic en esos segundos arrancaba otro recorrido en paralelo. */
   SIM.active = true; SIM.runId = (SIM.runId || 0) + 1;
   const btn = document.getElementById('simBtn'); if (btn) btn.disabled = true;
+  /* L18: candado del servidor (app_meta.sim_lock, 15 min) antes de tocar nada -- dos probadores que
+     arrancan el simulador a la vez podían ejecutar `reset_demo` uno sobre el otro y borrarse los datos
+     mutuamente. Si el candado ya está tomado, `apply` ya avisó (toast en español, ver ERROR_TEXTS) y el
+     simulador no arranca. */
+  try { await apply('sim_lock', { action: 'acquire' }); }
+  catch { SIM.active = false; if (btn) btn.disabled = false; return; }
   const reset = confirm('El simulador recorre el guion del demo manejando la app de verdad.\n¿Reiniciar antes los datos de ejemplo para que el recorrido salga igual que siempre?');
   const startUser = ME.id;
   if (reset) {
@@ -283,6 +289,9 @@ function simStop() { if (!SIM.active) return; SIM.abort = true; SIM.playing = tr
 async function simFinish() {
   window.confirm = SIM.confirmBackup || window.confirm;
   SIM.active = false; SIM.playing = false; SIM.waiters = [];
+  /* Suelta el candado del simulador para que otro probador pueda arrancarlo de inmediato (si no, expira
+     solo a los 15 min). Silencioso: si ya venció o la sesión cambió de usuario, no hay nada que avisar. */
+  try { await api.command('sim_lock', { action: 'release' }); } catch { /* nada que hacer */ }
   const btn = document.getElementById('simBtn'); if (btn) btn.disabled = false;
   const el = simEl(); el.classList.add('hidden'); el.querySelector('.sim-spot').style.opacity = '0'; el.querySelector('.sim-cursor').style.opacity = '0';
   T.push({ kind: 'simulator', name: 'end', target: String(SIM.stepNo), durationMs: Date.now() - SIM.startedAt, data: { completed: SIM.completed, stepsDone: SIM.completed ? SIM_SCRIPT.length : Math.max(0, SIM.stepNo - 1), totalSteps: SIM_SCRIPT.length } });

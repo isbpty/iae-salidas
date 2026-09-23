@@ -25,12 +25,14 @@ document.addEventListener('DOMContentLoaded', () => {
   setInterval(tickClock, 15000);
   boot();
 });
+/* L16: la hora se calibra con el servidor (serverNow) y se formatea en la zona de la escuela, no la del
+   navegador -- un móvil con otra zona u hora desfasada mostraba horas equivocadas en el reloj y en la TV. */
 function tickClock() {
-  const d = new Date();
+  const d = new Date(serverNow());
   const el = document.getElementById('clock');
-  if (el) el.textContent = d.toLocaleDateString('es-PA', { weekday: 'short', day: 'numeric', month: 'short' }) + ' · ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  if (el) el.textContent = d.toLocaleDateString('es-PA', { weekday: 'short', day: 'numeric', month: 'short', timeZone: schoolTZ() }) + ' · ' + nowHHMM();
   const tv = document.getElementById('tvClock');
-  if (tv) tv.textContent = pad(d.getHours()) + ':' + pad(d.getMinutes());
+  if (tv) tv.textContent = nowHHMM();
 }
 /* ---------- Tema claro / oscuro ---------- */
 function applyTheme(t) {
@@ -123,7 +125,10 @@ function renderTabs() {
   if (!allowed.includes(UI.view) && UI.view !== 'tv') UI.view = allowed[0];
   document.getElementById('tabs').innerHTML = all.filter(([k]) => allowed.includes(k)).map(([k, l]) => '<button class="tab' + (UI.view === k ? ' active' : '') + '" data-action="setView" data-view="' + k + '">' + l + '</button>').join('');
 }
-function badge(status, expired) { return expired ? '<span class="badge st-cancelada">Vencida</span>' : '<span class="badge st-' + status + '">' + (STATUS[status] || status) + '</span>'; }
+function badge(status, expired) { return expired ? '<span class="badge st-cancelada">Vencida</span>' : '<span class="badge st-' + esc(status) + '">' + esc(STATUS[status] || status) + '</span>'; }
+/* S11: r.color viene del seed hoy, pero si algún día se edita desde la UI no debe poder escapar del
+   atributo style/fill; se valida contra un hex de 6 dígitos antes de usarlo. */
+function safeColor(c) { return /^#[0-9a-f]{6}$/i.test(c || '') ? c : '#888888'; }
 function kindBadge(kind) {
   const map = { titular: 'k-titular', siempre: 'k-siempre', temporal: 'k-temporal', una_vez: 'k-unavez' };
   return '<span class="badge ' + (map[kind] || '') + '">' + esc(kindLabel(kind)) + '</span>';
@@ -155,7 +160,7 @@ function parentHome(p) {
   if (!kids.length) h += '<div class="empty">No eres titular de ningún estudiante.</div>';
   h += kids.map((k) => {
     const others = k.titulares.filter((t) => t !== p.id).map((t) => (person(t) || {}).name || '');
-    return '<div class="card kid"><div class="avatar">' + k.emoji + '</div><div class="grow"><b>' + esc(k.name) + '</b><div class="muted small">' + esc(k.grade) + ' · ' + esc(levelName(k.levelId)) + '</div>' +
+    return '<div class="card kid"><div class="avatar">' + esc(k.emoji) + '</div><div class="grow"><b>' + esc(k.name) + '</b><div class="muted small">' + esc(k.grade) + ' · ' + esc(levelName(k.levelId)) + '</div>' +
       '<div class="muted small">Titulares: tú' + (others.length ? ', ' + esc(others.join(', ')) : '') + ' · Autorizados: ' + authsForStudent(k.id).filter((a) => isAuthActive(a)).length + '</div>' +
       '<div class="small" style="margin-top:4px">' + busChip(k) + '</div>' +
       '<div class="actions"><button class="btn tiny" data-action="whereKid" data-id="' + k.id + '">📍 ¿Dónde está?</button>' + (k.routeId ? '<button class="btn tiny" data-action="noBusKid" data-id="' + k.id + '">🚌 Hoy no va en bus</button>' : '') + '</div></div></div>';
@@ -201,7 +206,7 @@ function parentAuths(p) {
       return '<div class="row item' + (active ? '' : ' inactive') + '"><span class="avatar sm">🧑</span><div><b>' + esc(pr.name) + '</b> <span class="muted small">' + esc(pr.relation) + (pr.cedula ? ' · céd. ' + esc(pr.cedula) : '') + (pr.hasAccount ? ' · 📱 tiene cuenta' : '') + '</span><div class="small">' + kindBadge(a.type) + ' <span class="muted">' + vig + (active ? '' : ' · inactiva') + '</span></div></div>' +
         '<button class="btn tiny danger" data-action="revokeAuth" data-id="' + a.id + '" title="Revocar">✕</button></div>';
     }).join('');
-    return '<div class="card"><div class="row"><span class="avatar sm">' + k.emoji + '</span><b>' + esc(k.name) + '</b> <span class="muted small">máx. ' + V.settings.maxTitulares + ' titulares</span></div>' + tit + (auths || '<div class="muted small">Sin personas autorizadas.</div>') + '</div>';
+    return '<div class="card"><div class="row"><span class="avatar sm">' + esc(k.emoji) + '</span><b>' + esc(k.name) + '</b> <span class="muted small">máx. ' + V.settings.maxTitulares + ' titulares</span></div>' + tit + (auths || '<div class="muted small">Sin personas autorizadas.</div>') + '</div>';
   }).join('');
   return h;
 }
@@ -226,7 +231,7 @@ function requestCard(r, o = {}) {
     main = '<b>📝 Excusa · ' + esc(r.excusaType) + ' · ' + esc(fmtDate(r.date)) + '</b><div class="small">' + esc(r.reason) + '</div>' + (r.attachmentName ? '<div class="small">📎 ' + esc(r.attachmentName) + '</div>' : '') +
       (r.status === 'rechazada' ? '<div class="small danger-text">Motivo: ' + esc(r.rejectReason) + '</div>' : '');
   }
-  return '<div class="card req"><div class="row top"><span class="avatar sm">' + st.emoji + '</span><div class="grow"><div class="small muted">' + esc(st.name) + ' · ' + esc(st.grade) + ' · vía ' + CHANNEL[r.channel] + ' · por ' + esc(firstName(by.name)) + '</div>' + main + '</div>' + badge(r.status, r.expired) + '</div>' +
+  return '<div class="card req"><div class="row top"><span class="avatar sm">' + esc(st.emoji) + '</span><div class="grow"><div class="small muted">' + esc(st.name) + ' · ' + esc(st.grade) + ' · vía ' + CHANNEL[r.channel] + ' · por ' + esc(firstName(by.name)) + '</div>' + main + '</div>' + badge(r.status, r.expired) + '</div>' +
     (o.compact ? '' : '<details class="hist"><summary>Historial</summary>' + r.history.map((h) => '<div class="small"><span class="muted mono">' + fmtTs(h.ts) + '</span> ' + esc(h.text) + '</div>').join('') + '</details>') +
     (canCancel ? '<div class="actions"><button class="btn tiny" data-action="cancelReq" data-id="' + r.id + '">Cancelar solicitud</button></div>' : '') +
     '</div>';
@@ -375,7 +380,7 @@ function schoolReqCard(r, staff) {
       actions = '<div class="actions"><button class="btn small primary" data-action="acceptExcusa" data-id="' + r.id + '">✅ Aceptar</button><button class="btn small danger" data-action="openModal" data-modal="reject" data-id="' + r.id + '">✕ Rechazar</button></div>';
     }
   }
-  return '<div class="card req"><div class="row top"><span class="avatar sm">' + st.emoji + '</span><div class="grow"><div class="small muted">' + esc(st.name) + ' · ' + esc(st.grade) + ' ' + esc(levelName(st.levelId)) + ' · vía ' + CHANNEL[r.channel] + ' · solicitó ' + esc(by.name) + ' (' + esc(by.relation) + ') · ' + fmtTs(r.createdAt) + '</div>' + body + '</div>' + badge(r.status, r.expired) + '</div>' +
+  return '<div class="card req"><div class="row top"><span class="avatar sm">' + esc(st.emoji) + '</span><div class="grow"><div class="small muted">' + esc(st.name) + ' · ' + esc(st.grade) + ' ' + esc(levelName(st.levelId)) + ' · vía ' + CHANNEL[r.channel] + ' · solicitó ' + esc(by.name) + ' (' + esc(by.relation) + ') · ' + fmtTs(r.createdAt) + '</div>' + body + '</div>' + badge(r.status, r.expired) + '</div>' +
     '<details class="hist"><summary>Historial</summary>' + r.history.map((h) => '<div class="small"><span class="muted mono">' + fmtTs(h.ts) + '</span> ' + esc(h.text) + '</div>').join('') + '</details>' + actions + '</div>';
 }
 function schoolRequests(staff) {
@@ -415,7 +420,7 @@ function schoolGate(staff) {
         act = '<button class="btn small primary" data-action="markExit" data-id="' + r.id + '">🚪 Verificar cédula y marcar retirado</button>';
       }
     }
-    return '<div class="card gate ' + r.status + '"><div><div class="gate-time">' + fmtTime(r.time) + '</div>' + personDoc(pk) + '</div><div class="grow"><div class="row"><span class="avatar sm">' + st.emoji + '</span><b>' + esc(st.name) + '</b> <span class="muted small">' + esc(st.grade) + ' · ' + esc(levelName(st.levelId)) + '</span></div>' +
+    return '<div class="card gate ' + r.status + '"><div><div class="gate-time">' + fmtTime(r.time) + '</div>' + personDoc(pk) + '</div><div class="grow"><div class="row"><span class="avatar sm">' + esc(st.emoji) + '</span><b>' + esc(st.name) + '</b> <span class="muted small">' + esc(st.grade) + ' · ' + esc(levelName(st.levelId)) + '</span></div>' +
       '<div class="small">Retira: <b>' + esc(pk.name) + '</b> (' + esc(pk.relation) + ') · céd. <b class="mono">' + esc(pk.cedula) + '</b> ' + kindBadge(r.pickupKind) + '</div>' +
       '<div class="small">📍 ' + esc(r.pickupPoint) + ' · código <b class="mono">' + r.code + '</b>' + (conf ? ' · confirmación: <b>' + conf + '</b>' : '') + (r.status === 'retirado' ? ' · <b>salió ' + fmtClock(r.exitAt) + '</b>' : '') + '</div>' +
       '<div class="actions">' + act + '</div></div></div>';
@@ -433,13 +438,13 @@ function viewTv() {
     const soon = Math.abs(minutesOf(r.time) - minutesOf(nowHHMM())) <= 15;
     return '<div class="tv-card' + (r.pickupKind === 'una_vez' ? ' once' : '') + (soon ? ' soon' : '') + '"><div class="tv-time">' + fmtTime(r.time) + (soon ? '<span class="tv-soon">ahora</span>' : '') + '</div>' +
       '<div class="tv-doc">' + (pk.docAttachmentId ? '<img src="/api/attachments/' + esc(pk.docAttachmentId) + '" alt="">' : '<div class="tv-nodoc">🪪</div>') + '</div>' +
-      '<div class="tv-body"><div class="tv-student">' + st.emoji + ' ' + esc(st.name) + ' <span class="muted">' + esc(st.grade) + '</span></div>' +
+      '<div class="tv-body"><div class="tv-student">' + esc(st.emoji) + ' ' + esc(st.name) + ' <span class="muted">' + esc(st.grade) + '</span></div>' +
       '<div class="tv-pick">Retira <b>' + esc(pk.name) + '</b> · ' + esc(pk.relation || '') + ' · céd. <span class="mono">' + esc(pk.cedula || '') + '</span> ' + kindBadge(r.pickupKind) + '</div>' +
       '<div class="tv-meta">📍 ' + esc(r.pickupPoint) + ' · código <b class="mono">' + r.code + '</b>' + (conf ? ' · confirmación: <b>' + conf + '</b>' : r.pickupKind === 'una_vez' ? ' · <span class="danger-text">requiere confirmación del titular</span>' : '') + '</div></div></div>';
   };
-  const d = new Date();
-  return '<div class="tv"><header class="tv-head"><div><div class="tv-title">🛂 Garita · ' + esc(V.settings.school.name) + '</div><div class="tv-date">' + (function () { const f = d.toLocaleDateString('es-PA', { weekday: 'long', day: 'numeric', month: 'long' }); return f.charAt(0).toUpperCase() + f.slice(1); })() + '</div></div>' +
-    '<div class="tv-clock" id="tvClock">' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + '</div><button class="btn" data-action="setView" data-view="school">✕ Salir (Esc)</button></header>' +
+  const d = new Date(serverNow());
+  return '<div class="tv"><header class="tv-head"><div><div class="tv-title">🛂 Garita · ' + esc(V.settings.school.name) + '</div><div class="tv-date">' + (function () { const f = d.toLocaleDateString('es-PA', { weekday: 'long', day: 'numeric', month: 'long', timeZone: schoolTZ() }); return f.charAt(0).toUpperCase() + f.slice(1); })() + '</div></div>' +
+    '<div class="tv-clock" id="tvClock">' + nowHHMM() + '</div><button class="btn" data-action="setView" data-view="school">✕ Salir (Esc)</button></header>' +
     '<section><h2>Por retirar <span class="tv-count">' + pend.length + '</span></h2>' + (pend.length ? '<div class="tv-grid">' + pend.map(card).join('') + '</div>' : '<div class="tv-empty">Sin salidas pendientes ✅</div>') + '</section>' +
     (done.length ? '<section class="tv-done"><h2>Retirados hoy <span class="tv-count">' + done.length + '</span></h2><div class="tv-list">' + done.slice(0, 8).map((r) => { const st = student(r.studentId); const pk = person(r.pickupBy) || {}; return '<div>' + fmtClock(r.exitAt) + ' · <b>' + esc(st.name) + '</b> · ' + esc(pk.name) + '</div>'; }).join('') + '</div></section>' : '') + '</div>';
 }
@@ -454,7 +459,7 @@ function schoolStudents(staff) {
     const kids = scope.filter((s) => s.levelId === lv.id);
     if (!kids.length) return '';
     return '<h3>' + esc(lv.name) + '</h3><table class="tbl"><tr><th>Estudiante</th><th>Grado</th><th>Titulares</th><th>Autorizados vigentes</th><th>Bus</th><th>Solicitudes</th></tr>' + kids.map((k) =>
-      '<tr><td>' + k.emoji + ' ' + esc(k.name) + '</td><td>' + esc(k.grade) + '</td><td>' + k.titulares.map((t) => esc((person(t) || {}).name) + ' <span class="muted small">(' + esc((person(t) || {}).relation) + ' · ' + esc((person(t) || {}).phone) + ')</span>').join('<br>') + '</td>' +
+      '<tr><td>' + esc(k.emoji) + ' ' + esc(k.name) + '</td><td>' + esc(k.grade) + '</td><td>' + k.titulares.map((t) => esc((person(t) || {}).name) + ' <span class="muted small">(' + esc((person(t) || {}).relation) + ' · ' + esc((person(t) || {}).phone) + ')</span>').join('<br>') + '</td>' +
       '<td>' + (authsForStudent(k.id).filter((a) => isAuthActive(a)).map((a) => esc((person(a.personId) || {}).name) + ' ' + kindBadge(a.type)).join('<br>') || '<span class="muted">—</span>') + '</td><td>' + busChip(k) + '</td><td>' + V.requests.filter((r) => r.studentId === k.id).length + '</td></tr>').join('') + '</table>';
   }).join('');
 }
@@ -557,11 +562,11 @@ function routeMap(r, leg, progress, opts = {}) {
     const gps = (V.gpsNow || {})[r.id] || {};
     const id = 'bus_' + (++MAP_SEQ);
     MAP_ANIMS.set(id, { r, leg, base: progress, rate: gps.rate || 0, simulated: !!gps.simulated, at: Date.now(), X, Y });
-    bus = '<g class="bus-marker" id="' + id + '" style="transform:translate(' + X(p.lng) + 'px,' + Y(p.lat) + 'px)"><circle class="bus-pulse" r="22" fill="' + r.color + '"/><circle r="15" fill="#fff" stroke="' + r.color + '" stroke-width="3"/><text y="6" font-size="16" text-anchor="middle">🚌</text></g>';
+    bus = '<g class="bus-marker" id="' + id + '" style="transform:translate(' + X(p.lng) + 'px,' + Y(p.lat) + 'px)"><circle class="bus-pulse" r="22" fill="' + safeColor(r.color) + '"/><circle r="15" fill="#fff" stroke="' + safeColor(r.color) + '" stroke-width="3"/><text y="6" font-size="16" text-anchor="middle">🚌</text></g>';
   }
   return '<svg class="map" viewBox="0 0 ' + W + ' ' + H + '" xmlns="http://www.w3.org/2000/svg"><rect width="' + W + '" height="' + H + '" fill="#eef3ee"/>' + grid +
-    '<polyline points="' + pts + '" fill="none" stroke="' + r.color + '" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" opacity=".75"/>' +
-    stops.map((s, i) => '<circle cx="' + X(s.lng) + '" cy="' + Y(s.lat) + '" r="6" fill="' + (i === 0 || i === stops.length - 1 ? r.color : '#fff') + '" stroke="' + r.color + '" stroke-width="2"/><text x="' + X(s.lng) + '" y="' + (Y(s.lat) + (i % 2 ? -12 : 22)) + '" font-size="12" text-anchor="middle" fill="#374151">' + esc(s.name) + '</text>').join('') +
+    '<polyline points="' + pts + '" fill="none" stroke="' + safeColor(r.color) + '" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" opacity=".75"/>' +
+    stops.map((s, i) => '<circle cx="' + X(s.lng) + '" cy="' + Y(s.lat) + '" r="6" fill="' + (i === 0 || i === stops.length - 1 ? safeColor(r.color) : '#fff') + '" stroke="' + safeColor(r.color) + '" stroke-width="2"/><text x="' + X(s.lng) + '" y="' + (Y(s.lat) + (i % 2 ? -12 : 22)) + '" font-size="12" text-anchor="middle" fill="#374151">' + esc(s.name) + '</text>').join('') +
     bus + '</svg>';
 }
 function locationCard(loc) {
@@ -592,9 +597,9 @@ function schoolRutas(staff) {
       const status = nb ? '<span class="badge st-nobus">Hoy no va</span>' : rec ? '<span class="badge st-' + rec.status + '">' + ({ abordo: 'A bordo', bajo: 'Bajó', no_abordo: 'No abordó' })[rec.status] + '</span> <span class="muted small">' + fmtClock12(rec.ts) + '</span>' : '<span class="muted small">sin marcar</span>';
       const b = (status2, label, cls, stopId) => '<button class="btn tiny ' + cls + '" data-action="board" data-route="' + r.id + '" data-leg="' + leg + '" data-id="' + k.id + '" data-status="' + status2 + '" data-stop="' + stopId + '">' + label + '</button> ';
       const btns = can && !nb ? b('abordo', '✅ Abordó', '', leg === 'ida' ? k.stopId : stops[0].id) + b('bajo', '🏁 Bajó', '', leg === 'ida' ? stops[stops.length - 1].id : k.stopId) + b('no_abordo', '✕ No abordó', 'danger', '') : '';
-      return '<tr><td>' + k.emoji + ' ' + esc(k.name) + ' <span class="muted small">' + esc(k.grade) + '</span></td><td>' + (stop ? esc(stop.name) : '—') + '</td><td>' + status + '</td><td>' + btns + '</td></tr>';
+      return '<tr><td>' + esc(k.emoji) + ' ' + esc(k.name) + ' <span class="muted small">' + esc(k.grade) + '</span></td><td>' + (stop ? esc(stop.name) : '—') + '</td><td>' + status + '</td><td>' + btns + '</td></tr>';
     }).join('');
-    return '<div class="card route-card" style="border-left-color:' + r.color + '">' + head + map + '<table class="tbl" style="margin-bottom:0"><tr><th>Estudiante</th><th>Parada</th><th>Estado hoy</th><th></th></tr>' + (rows || '<tr><td colspan="4" class="muted">Sin estudiantes en este tramo.</td></tr>') + '</table></div>';
+    return '<div class="card route-card" style="border-left-color:' + safeColor(r.color) + '">' + head + map + '<table class="tbl" style="margin-bottom:0"><tr><th>Estudiante</th><th>Parada</th><th>Estado hoy</th><th></th></tr>' + (rows || '<tr><td colspan="4" class="muted">Sin estudiantes en este tramo.</td></tr>') + '</table></div>';
   }).join('');
 }
 
@@ -651,7 +656,7 @@ function modalAuth(d) {
   const mode = d.mode || 'nueva';
   const type = d.type || 'siempre';
   return '<h3>👥 Autorizar persona para retirar</h3><form data-form="newAuth" class="form">' +
-    '<div class="label">Estudiantes</div><div class="checks">' + kids.map((k) => '<label class="check"><input type="checkbox" name="studentIds" value="' + k.id + '" checked> ' + k.emoji + ' ' + esc(k.name) + '</label>').join('') + '</div>' +
+    '<div class="label">Estudiantes</div><div class="checks">' + kids.map((k) => '<label class="check"><input type="checkbox" name="studentIds" value="' + k.id + '" checked> ' + esc(k.emoji) + ' ' + esc(k.name) + '</label>').join('') + '</div>' +
     '<div class="label">Persona</div><div class="radios"><label class="check"><input type="radio" name="mode" value="nueva" data-change="modalField"' + (mode === 'nueva' ? ' checked' : '') + '> Nueva persona (sin cuenta)</label><label class="check"><input type="radio" name="mode" value="cuenta" data-change="modalField"' + (mode === 'cuenta' ? ' checked' : '') + '> Padre/madre que ya tiene cuenta</label></div>' +
     (mode === 'nueva'
       ? '<div class="grid2"><label>Nombre completo <input name="name" required value="' + esc(d.name || '') + '"></label><label>Parentesco <input name="relation" required placeholder="Abuela, Tío, Chofer…" value="' + esc(d.relation || '') + '"></label><label>Cédula <input name="cedula" required placeholder="8-123-456" value="' + esc(d.cedula || '') + '"></label><label>Teléfono <input name="phone" placeholder="+507 6xxx-xxxx" value="' + esc(d.phone || '') + '"></label></div>'
@@ -683,7 +688,7 @@ function modalScan(d) {
     return '<h3>✅ Código válido · ' + r.code + '</h3><div class="row" style="align-items:flex-start; gap:14px">' +
       (pk.docAttachmentId ? '<img class="doc-big" style="max-width:220px; margin:0" src="/api/attachments/' + esc(pk.docAttachmentId) + '">' : '<div class="doc-placeholder" style="width:120px;height:120px;font-size:13px">🪪<br>' + esc(pk.docName || 'sin foto') + '</div>') +
       '<div><div style="font-size:18px"><b>' + esc(pk.name) + '</b> <span class="muted">(' + esc(pk.relation) + ')</span></div><div>Cédula: <b class="mono">' + esc(pk.cedula) + '</b> · ' + kindBadge(el.kind || r.pickupKind) + '</div>' +
-      '<div style="margin-top:8px">Retira a <b>' + st.emoji + ' ' + esc(st.name) + '</b> · ' + esc(st.grade) + '</div><div class="small muted">Salida ' + fmtTime(r.time) + ' · ' + esc(r.pickupPoint) + '</div>' +
+      '<div style="margin-top:8px">Retira a <b>' + esc(st.emoji) + ' ' + esc(st.name) + '</b> · ' + esc(st.grade) + '</div><div class="small muted">Salida ' + fmtTime(r.time) + ' · ' + esc(r.pickupPoint) + '</div>' +
       ((el.kind || r.pickupKind) === 'una_vez' && !(r.confirmation && r.confirmation.status === 'confirmada') ? '<div class="small danger-text" style="margin-top:6px">Autorización de una sola vez: falta la confirmación del titular.</div>' : '') + '</div></div>' +
       '<div class="actions"><button class="btn primary" data-action="markExit" data-id="' + r.id + '">🚪 Identidad verificada · marcar retirado</button><button class="btn" type="button" data-action="closeModal">Cancelar</button></div>';
   }
