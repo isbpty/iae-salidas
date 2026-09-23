@@ -51,10 +51,12 @@ export async function daySummary(ctx) {
 register({
   day_summary: {
     roles: STAFF_ROLES,
+    bump: false, // solo lee y arma el resumen
     handler: async (ctx) => { requireCap(ctx, 'ver_solicitudes'); return daySummary(ctx); },
   },
   send_day_summary: {
     roles: STAFF_ROLES,
+    /* Sí sube la revisión: crea un aviso de rol para Dirección que otras pantallas deben ver. */
     handler: async (ctx) => {
       requireCap(ctx, 'ver_solicitudes');
       const s = await daySummary(ctx);

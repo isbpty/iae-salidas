@@ -95,6 +95,7 @@ register({
   },
   mark_notifications_read: {
     roles: ['parent', ...STAFF_ROLES],
+    bump: false, // marca lecturas propias; no cambia lo que ven los demás
     handler: async (ctx) => {
       if (ctx.person) await markNotificationsRead(ctx.q, { personId: ctx.person.id }, ctx.now);
       if (ctx.staff) { await markNotificationsRead(ctx.q, { staffId: ctx.staff.id }, ctx.now); await markNotificationsRead(ctx.q, { role: ctx.user.role }, ctx.now); }

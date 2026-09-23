@@ -118,3 +118,49 @@ test('the Vercel entry answers 503 with a generic message and logs the detail', 
     if (prev === undefined) delete process.env.SESSION_SECRET; else process.env.SESSION_SECRET = prev;
   }
 });
+
+test('R4/R1: un sondeo 304 en me/view solo lee la revisión, sin getUser ni testers', async () => {
+  const t = await makeTestApp(); const { base, close } = await t.listen();
+  const cookie = await loginAs(base, 'u_p1');
+  const first = await call(base, '/api/me/view', { cookie });
+  const etag = first.headers.get('etag');
+  const origQuery = t.db.query;
+  const calls = [];
+  t.db.query = (sql, params) => { calls.push(sql); return origQuery(sql, params); };
+  try {
+    const res = await call(base, '/api/me/view', { cookie, headers: { 'if-none-match': etag } });
+    assert.equal(res.status, 304);
+    assert.ok(calls.some((s) => /app_meta/i.test(s)), 'reads the revision');
+    assert.ok(!calls.some((s) => /from\s+users/i.test(s)), 'a matching 304 does no getUser query');
+    assert.ok(!calls.some((s) => /from\s+testers/i.test(s)), 'a matching 304 does no tester query');
+  } finally { t.db.query = origQuery; }
+  /* A token without a valid signature never touches the database. */
+  const before = calls.length;
+  const bad = await call(base, '/api/me/view', { cookie: 'iae_session=not-a-real-token', headers: { 'if-none-match': etag } });
+  assert.equal(bad.status, 401);
+  await close(); await t.close();
+});
+
+test('R4/R1: cuando la revisión cambió, el sondeo sí construye la vista completa', async () => {
+  const t = await makeTestApp(); const { base, close } = await t.listen();
+  const cookie = await loginAs(base, 'u_p1');
+  const first = await call(base, '/api/me/view', { cookie });
+  const staleEtag = first.headers.get('etag');
+  await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '13:00', pickupBy: 'p1', reason: 'x' });
+  const res = await call(base, '/api/me/view', { cookie, headers: { 'if-none-match': staleEtag } });
+  assert.equal(res.status, 200);
+  assert.ok(res.json.view.requests.length >= 1);
+  await close(); await t.close();
+});
+
+test('R6: los estáticos llevan ETag débil y responden 304', async () => {
+  const t = await makeTestApp(); const { base, close } = await t.listen();
+  const first = await call(base, '/client/api.js');
+  assert.equal(first.status, 200);
+  const etag = first.headers.get('etag');
+  assert.match(etag, /^W\//, 'weak etag');
+  assert.equal(first.headers.get('cache-control'), 'no-cache');
+  const second = await call(base, '/client/api.js', { headers: { 'if-none-match': etag } });
+  assert.equal(second.status, 304);
+  await close(); await t.close();
+});

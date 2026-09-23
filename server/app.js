@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HttpError } from './domain/errors.js';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import { cookieValue, sessionToken, verifySession, pinToken, verifyPinToken, signToken, verifyToken, issuedAtMs } from './session.js';
 import { constantEquals, attemptsBlocked, recordLoginFailure, clearLoginFailures, consumeTokenId, PIN_GUESS_LIMIT } from './auth.js';
 import { listUsers, getUser, getRevision, getAttachment, insertAudit, purgeActivity } from './db/repo.js';
@@ -255,6 +255,25 @@ export function createApp(deps) {
       return json(res, 404, { error: 'not_found' });
     }
 
+    /* R1/R4: el sondeo de la vista (cada 3-10 s desde el cliente) es, con mucho, la petición más frecuente.
+       Cuando nada cambió basta con la firma HMAC de la cookie (sin consulta) y una lectura de la revisión: ni
+       `getUser` ni la comprobación del probador hacen falta para responder 304. Una sesión revocada solo se
+       rechaza en el momento en que algo sí cambió (siguiente 200), lo cual es aceptable. Un token con firma
+       inválida nunca llega a tocar la base de datos. */
+    if (path === 'me/view' && req.method === 'GET') {
+      const bare = verifySession(cookieValue(req.headers.cookie, 'iae_session'), config.secret);
+      if (!bare || !bare.userId) return json(res, 401, { error: 'authentication_required' });
+      const revision = await getRevision(db);
+      const etag = `"${revision}"`;
+      act.revision = revision;
+      if (req.headers['if-none-match'] === etag) { act.name = 'view_304'; res.writeHead(304, { etag, 'cache-control': 'no-store' }); return res.end(); }
+      const auth = await sessionUser(req);
+      if (!auth) return json(res, 401, { error: 'authentication_required' });
+      act.user = auth.user; act.session = auth.session;
+      const view = await db.tx((q) => buildView(q, auth.user.id, env()));
+      return json(res, 200, { revision, view: decorate(view, auth.session) }, { etag });
+    }
+
     const auth = await sessionUser(req);
     if (!auth) return json(res, 401, { error: 'authentication_required' });
     const { user, session, access } = auth;
@@ -278,14 +297,6 @@ export function createApp(deps) {
       if (!allowsUser(access, next.id)) return json(res, 403, { error: 'user_not_allowed' });
       act.user = next;
       return startSession(res, next, session, act, session.sid);
-    }
-    if (path === 'me/view' && req.method === 'GET') {
-      const revision = await getRevision(db);
-      const etag = `"${revision}"`;
-      act.revision = revision;
-      if (req.headers['if-none-match'] === etag) { act.name = 'view_304'; res.writeHead(304, { etag, 'cache-control': 'no-store' }); return res.end(); }
-      const view = await db.tx((q) => buildView(q, user.id, env()));
-      return json(res, 200, { revision, view: decorate(view, session) }, { etag });
     }
     if (path.startsWith('attachments/') && req.method === 'GET') {
       const att = await getAttachment(db, path.slice('attachments/'.length));
@@ -322,7 +333,7 @@ export function createApp(deps) {
     return json(res, 404, { error: 'not_found' });
   }
 
-  async function serveStatic(res, pathname) {
+  async function serveStatic(req, res, pathname) {
     let file = null;
     if (pathname === '/' || pathname === '/index.html') file = join(ROOT, 'public', 'index.html');
     else if (pathname === '/super' || pathname === '/super.html') file = join(ROOT, 'public', 'super.html');
@@ -335,8 +346,12 @@ export function createApp(deps) {
     if (!file) return json(res, 404, { error: 'not_found' });
     try {
       const data = await readFile(file);
+      /* Weak ETag over the bytes: cheap to compute, lets a browser (or vercel.json's own `no-cache`) skip the
+         download when nothing changed instead of re-fetching the whole file on every page load (R6). */
+      const etag = 'W/"' + createHash('sha1').update(data).digest('hex').slice(0, 16) + '"';
       const extra = pathname === '/super-sw.js' ? { 'service-worker-allowed': '/' } : {};
-      res.writeHead(200, { 'content-type': MIME[extname(file)] || 'application/octet-stream', 'cache-control': 'no-cache', ...extra });
+      if (req.headers['if-none-match'] === etag) { res.writeHead(304, { etag, 'cache-control': 'no-cache', ...extra }); return res.end(); }
+      res.writeHead(200, { 'content-type': MIME[extname(file)] || 'application/octet-stream', 'cache-control': 'no-cache', etag, ...extra });
       res.end(data);
     } catch { json(res, 404, { error: 'not_found' }); }
   }
@@ -369,7 +384,7 @@ export function createApp(deps) {
     try {
       if (isApi) return await api(req, res, path, act, url);
       if (config.serverless) return json(res, 404, { error: 'not_found' });
-      return await serveStatic(res, url.pathname);
+      return await serveStatic(req, res, url.pathname);
     } catch (e) {
       const status = e.status || (e instanceof SyntaxError ? 400 : 500);
       act.error = status === 500 ? 'internal_error' : e.code || e.message;

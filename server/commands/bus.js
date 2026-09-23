@@ -33,6 +33,7 @@ register({
   },
   where_is: {
     roles: ['parent'],
+    bump: false, // consulta de lectura
     handler: async (ctx, input) => {
       const st = await requireTitular(ctx, input.studentId);
       const w = await whereIs(ctx, st.id);

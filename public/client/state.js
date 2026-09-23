@@ -30,14 +30,16 @@ function adopt(payload) {
   V = payload.view; REV = payload.revision; ME = V.user; SKEW = V.serverNow - Date.now();
   if (prev && prev.user.id === ME.id) toastNewNotifications(prev, V);
 }
+/* Devuelve si la vista cambió (200) o no (304/omitida): `api.subscribe` lo usa para el *backoff* del sondeo. */
 async function refresh() {
-  if (loginShowing) return;
+  if (loginShowing) return false;
   try {
     const r = await api.view('"' + REV + '"');
-    if (r.notModified) return;
+    if (r.notModified) return false;
     adopt(r); setBadge(connectedText());
     if (!formOpen()) render();
-  } catch (e) { if (e.status === 401) return showLogin(); setBadge('sin conexión'); }
+    return true;
+  } catch (e) { if (e.status === 401) { showLogin(); return false; } setBadge('sin conexión'); return false; }
 }
 /* Errores que el servidor manda en snake_case y merecen una frase propia. */
 const ERROR_TEXTS = { demo_only: 'Función solo del modo demo', too_many_attempts: 'Demasiados intentos. Espera 15 minutos.' };
@@ -45,7 +47,7 @@ function errorText(e) { return ERROR_TEXTS[e.code] || 'No se pudo guardar: ' + e
 /* Ejecuta un comando y adopta la vista que devuelve. Lanza el error para que quien llama no siga. */
 async function apply(name, input) {
   UI.busy = true; setBadge('guardando…');
-  try { const r = await api.command(name, input); adopt(r); setBadge(connectedText()); return r.result; }
+  try { const r = await api.command(name, input); adopt(r); setBadge(connectedText()); api.resetPoll(); return r.result; }
   catch (e) { if (e.status === 401) showLogin(); else toast(errorText(e), 'error'); throw e; }
   finally { UI.busy = false; }
 }

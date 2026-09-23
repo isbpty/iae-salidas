@@ -26,6 +26,7 @@ register({
   },
   scan_code: {
     roles: STAFF_ROLES,
+    bump: false, // solo lee y deja una fila en la bitácora de quien escanea; no cambia nada para los demás
     handler: async (ctx, input) => {
       requireCap(ctx, 'marcar_salida');
       const code = String(input.code || '').replace(/\D/g, '');

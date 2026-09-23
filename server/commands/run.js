@@ -1,7 +1,7 @@
 import './all.js';
 import { HttpError } from '../domain/errors.js';
 import { makeCtx } from '../domain/context.js';
-import { insertAudit, bumpRevision } from '../db/repo.js';
+import { insertAudit, bumpRevision, getRevision } from '../db/repo.js';
 import { spendAttempt } from '../auth.js';
 import { COMMANDS } from './index.js';
 
@@ -25,7 +25,9 @@ export async function runCommand(deps, { userId, name, input = {}, channel = 'we
     if (!cmd.roles.includes(ctx.user.role)) throw new HttpError(403, 'forbidden_role');
     const result = await cmd.handler(ctx, input || {});
     await insertAudit(q, { at: ctx.now, actorUserId: ctx.user.id, actorRole: ctx.user.role, actorName: ctx.user.name, command: name, channel, input: sanitize(cmd.auditInput ? cmd.auditInput(input || {}) : input) });
-    const revision = await bumpRevision(q);
+    /* Read-only commands (bump: false) do not invalidate every open screen: the caller already gets
+       their fresh view back in the response (app.js), and nothing changed for anyone else. */
+    const revision = cmd.bump === false ? await getRevision(q) : await bumpRevision(q);
     return { result, revision };
   });
 }
