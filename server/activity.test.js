@@ -104,7 +104,7 @@ test('clientInfo: geolocation only behind Vercel; the IP only trusts x-forwarded
 });
 
 test('sanitizeFingerprint keeps only the whitelisted device-fingerprint keys', () => {
-  assert.deepEqual(sanitizeFingerprint({ platform: 'Win32', fp: 'abc123', evil: 'drop table', cookie: 'steal-me' }), { platform: 'Win32', fp: 'abc123' });
+  assert.deepEqual(sanitizeFingerprint({ platform: 'Win32', fp: 'abc123def0', evil: 'drop table', cookie: 'steal-me' }), { platform: 'Win32', fp: 'abc123def0' });
   assert.equal(sanitizeFingerprint({ evil: 1 }), null, 'nothing left of the whitelist: null, not an empty object');
   assert.equal(sanitizeFingerprint(null), null);
   assert.equal(sanitizeFingerprint('nope'), null);
@@ -164,13 +164,13 @@ test('session_start events keep only the whitelisted fingerprint keys and copy f
       width: 1280, height: 800, lang: 'es-PA', screenWidth: 1512, screenHeight: 982, devicePixelRatio: 2, colorDepth: 24,
       languages: ['es-PA', 'es'], platform: 'MacIntel', hardwareConcurrency: 8, deviceMemory: 8, maxTouchPoints: 0,
       tz: 'America/Panama', connection: '4g', uaData: { brands: ['Chrome 128'], mobile: false, platform: 'macOS' }, standalone: false,
-      fp: 'abc123def456fp01', evil: 'drop table activity_events', cookie: 'steal-me',
+      fp: 'abc123def456f001', evil: 'drop table activity_events', cookie: 'steal-me',
     },
   }];
   const r = await post(base, '/api/telemetry', { events }, cookie);
   assert.equal(r.json.stored, 1);
   const [ev] = await t.db.query("SELECT * FROM activity_events WHERE kind='session_start' ORDER BY id DESC LIMIT 1");
-  assert.equal(ev.fp, 'abc123def456fp01');
+  assert.equal(ev.fp, 'abc123def456f001');
   assert.equal(ev.data.evil, undefined, 'unknown keys are dropped, not just unmasked');
   assert.equal(ev.data.cookie, undefined);
   assert.equal(ev.data.platform, 'MacIntel'); assert.equal(ev.data.tz, 'America/Panama');
@@ -193,11 +193,81 @@ test('POST /api/super/fp records the super admin\'s own device fingerprint (need
   assert.equal((await post(base, '/api/super/fp', { fp: { platform: 'Win32', fp: 'superfp01' } }, app)).status, 401, 'an app session is not a super session');
 
   const sup = await loginSuper(base, made[0].pin);
-  const r = await post(base, '/api/super/fp', { fp: { platform: 'Win32', evil: 'drop table', fp: 'superfp01' } }, sup);
+  const r = await post(base, '/api/super/fp', { fp: { platform: 'Win32', evil: 'drop table', fp: 'a0b1c2d3e4' } }, sup);
   assert.deepEqual(r.json, { ok: true });
   const [ev] = await t.db.query("SELECT * FROM activity_events WHERE kind='session_start' AND role='super' ORDER BY id DESC LIMIT 1");
-  assert.equal(ev.tester_id, 't1'); assert.equal(ev.fp, 'superfp01'); assert.equal(ev.data.platform, 'Win32'); assert.equal(ev.data.evil, undefined);
+  assert.equal(ev.tester_id, 't1'); assert.equal(ev.fp, 'a0b1c2d3e4'); assert.equal(ev.data.platform, 'Win32'); assert.equal(ev.data.evil, undefined);
   /* classify() ignores this path: recordRequest never adds a second, redundant 'super_action' row for it */
   assert.equal((await t.db.query("SELECT count(*)::int AS c FROM activity_events WHERE name = 'super/fp'"))[0].c, 0);
   await close(); await t.close();
+});
+
+/* S7: el cliente no puede mandar `kind: 'command'` (ni ningún otro kind fuera de la lista blanca): así un
+   padre no puede hacer pasar un evento suyo por una acción o un error del servidor. */
+test('telemetry: un kind fuera de la lista blanca (p. ej. "command", reservado al servidor) se descarta en silencio', async () => {
+  const t = await makeTestApp(); const { base, close } = await t.listen();
+  const cookie = await loginAs(base, 'u_p1');
+  const events = [
+    { kind: 'command', name: 'approve_request', ok: false }, // se hace pasar por una acción/error del servidor
+    { kind: 'nope', name: 'x' }, // ni siquiera un kind razonable
+    { kind: 'click', name: 'real' }, // este sí es de la lista blanca
+  ];
+  const r = await post(base, '/api/telemetry', { events }, cookie);
+  assert.equal(r.json.stored, 1, 'solo el evento de la lista blanca se guarda');
+  const rows = await t.db.query("SELECT kind, name FROM activity_events WHERE source='client' ORDER BY id");
+  assert.deepEqual(rows, [{ kind: 'click', name: 'real' }]);
+  await close(); await t.close();
+});
+
+/* S7: el `data` de un evento (ya enmascarado) se acota a 2 KB; el evento se guarda igual, solo que sin
+   `data`, en vez de rechazarse entero o dejar crecer la fila sin límite. */
+test('telemetry: un `data` que pese más de 2 KB ya enmascarado se guarda como null, no rechaza el evento', async () => {
+  const t = await makeTestApp(); const { base, close } = await t.listen();
+  const cookie = await loginAs(base, 'u_p1');
+  const data = {};
+  for (let i = 0; i < 20; i++) data['k' + i] = 'y'.repeat(190); // cada string sobrevive maskInput (< 200), pero suman > 2 KB
+  const small = { note: 'ok' };
+  const r = await post(base, '/api/telemetry', { events: [{ kind: 'click', name: 'big', data }, { kind: 'click', name: 'small', data: small }] }, cookie);
+  assert.equal(r.json.stored, 2);
+  const rows = await t.db.query("SELECT name, data FROM activity_events WHERE source='client' ORDER BY id");
+  assert.equal(rows.find((r) => r.name === 'big').data, null, 'se descarta el data, no el evento');
+  assert.deepEqual(rows.find((r) => r.name === 'small').data, small, 'un data pequeño se guarda tal cual');
+  await close(); await t.close();
+});
+
+/* R7: máximo ~30 lotes de telemetría por minuto por `sid` -> 429 too_many_batches. */
+test('telemetry: más de ~30 lotes por minuto del mismo sid → 429 too_many_batches', async () => {
+  const t = await makeTestApp(); const { base, close } = await t.listen();
+  const cookie = await loginAs(base, 'u_p1');
+  let last;
+  for (let i = 0; i < 31; i++) last = await post(base, '/api/telemetry', { events: [{ kind: 'click', name: 'n' + i }] }, cookie);
+  assert.equal(last.status, 429); assert.equal(last.json.error, 'too_many_batches');
+  await close(); await t.close();
+});
+
+test('sanitizeFingerprint acota cada valor de la lista blanca, no solo las claves', () => {
+  const longString = 'x'.repeat(500);
+  const bigArray = Array.from({ length: 30 }, (_, i) => 'lang' + i);
+  const m = sanitizeFingerprint({
+    platform: longString,
+    languages: bigArray,
+    devicePixelRatio: 2.5,
+    hardwareConcurrency: NaN,
+    standalone: false,
+    uaData: { brands: ['Chrome 128'], mobile: false, platform: 'macOS', evil: 'drop table' },
+    connection: { nested: 'object, not a string' },
+    fp: 'abc123def456f001',
+  });
+  assert.equal(m.platform.length, 120, 'un string de la lista blanca se acota igual que maskInput');
+  assert.equal(m.languages.length, 10, 'un array se acota a 10 elementos');
+  assert.equal(m.devicePixelRatio, 2.5);
+  assert.equal(m.hardwareConcurrency, null, 'un número no finito no se guarda tal cual');
+  assert.equal(m.standalone, false);
+  assert.deepEqual(m.uaData, { brands: ['Chrome 128'], mobile: false, platform: 'macOS' }, 'claves de uaData también con lista blanca propia');
+  assert.equal(m.connection, undefined, 'un objeto donde se esperaba un valor simple se descarta');
+  assert.equal(m.fp, 'abc123def456f001');
+
+  assert.equal(sanitizeFingerprint({ platform: 'Win32', fp: 'not-hex-!!' }).fp, undefined, 'un fp que no es hex se descarta (no bloquea el resto)');
+  assert.equal(sanitizeFingerprint({ platform: 'Win32', fp: 'ab' }).fp, undefined, 'un fp demasiado corto (< 8) también se descarta');
+  assert.equal(sanitizeFingerprint({ fp: 'A0B1C2D3' }).fp, 'A0B1C2D3', 'hex en mayúsculas también vale');
 });

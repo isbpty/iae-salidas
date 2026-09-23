@@ -34,7 +34,7 @@ function adopt(payload) {
 async function refresh() {
   if (loginShowing) return false;
   try {
-    const r = await api.view('"' + REV + '"');
+    const r = await api.view('"' + REV + '"', true);
     if (r.notModified) return false;
     adopt(r); setBadge(connectedText());
     if (!formOpen()) render();

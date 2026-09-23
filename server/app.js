@@ -17,6 +17,28 @@ import { pushEnabled, cleanSubscription, saveSubscription, removeSubscription, s
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.webmanifest': 'application/manifest+json; charset=utf-8' };
 
+/* R7: activity_events (una fila por petición no-304 más los lotes de telemetría) y audit_log (una fila por
+   comando) crecen sin límite si nadie entra a /super y pulsa "Purgar" a mano. Cada carga del resumen de
+   /super (la página principal del panel) aprovecha para borrar lo viejo, como mucho una vez por hora --
+   reclamado atómicamente en app_meta, el mismo patrón que el cooldown de los avisos push (ver push.js,
+   claimLoginAlert) -- para no sumarle dos DELETE a cada refresco del panel mientras está abierto. */
+const AUTO_PURGE_COOLDOWN_S = 3600;
+const ACTIVITY_RETENTION_DAYS = 30;
+const AUDIT_RETENTION_DAYS = 180;
+async function claimAutoPurge(db, now) {
+  const t = Math.floor(now.getTime() / 1000);
+  const r = await db.query(`INSERT INTO app_meta(id, value) VALUES ('auto_purge_activity', $1)
+    ON CONFLICT (id) DO UPDATE SET value = EXCLUDED.value WHERE app_meta.value <= $2 RETURNING value`, [t, t - AUTO_PURGE_COOLDOWN_S]);
+  return r.length > 0;
+}
+async function autoPurgeOldActivity(db, now) {
+  if (!(await claimAutoPurge(db, now))) return;
+  try {
+    await purgeActivity(db, new Date(now.getTime() - ACTIVITY_RETENTION_DAYS * 86400000));
+    await db.query('DELETE FROM audit_log WHERE at < $1', [new Date(now.getTime() - AUDIT_RETENTION_DAYS * 86400000).toISOString()]);
+  } catch (e) { console.error('purga automática de actividad/auditoría falló:', e.message); }
+}
+
 export function createApp(deps) {
   const { db, config } = deps;
   const clients = new Set();
@@ -184,7 +206,11 @@ export function createApp(deps) {
       if (req.method === 'GET') {
         const f = Object.fromEntries(url.searchParams);
         if (path === 'activity/me') return json(res, 200, { tester: { id: sup.testerId, name: sup.testerName }, users: await userOptions() });
-        if (path === 'activity/summary') return json(res, 200, await summary(db, f, deps.now()));
+        if (path === 'activity/summary') {
+          const now = deps.now();
+          await autoPurgeOldActivity(db, now);
+          return json(res, 200, await summary(db, f, now));
+        }
         if (path === 'activity/events') return json(res, 200, await activityEvents(db, f));
         if (path === 'activity/testers') return json(res, 200, await listTesters(db));
         /* Avisos en el celular: la clave pública viaja al navegador; sin claves VAPID la función está apagada. */
@@ -376,8 +402,11 @@ export function createApp(deps) {
   /* Cada petición /api/* deja un evento con quién, qué, cuánto tardó y cómo terminó. */
   async function recordRequest(req, path, act, startedAt, startedMs, res) {
     const c = classify(path, req.method);
-    /* A 304 poll every 3 s per device says nothing new: skipping it keeps the log (and Neon writes) small. */
-    if (!c || act.name === 'view_304') return;
+    /* A 304 poll every 3 s per device says nothing new: skipping it keeps the log (and Neon writes) small.
+       R8: a 200 also costs an INSERT after the response already left; when it comes from the poll loop
+       (public/client/api.js sends `x-iae-poll: 1` on every call except the very first, boot() load) it is
+       just as uninteresting as the 304s -- only the initial load of a screen is worth a row. */
+    if (!c || act.name === 'view_304' || (c.kind === 'view' && req.headers['x-iae-poll'] === '1')) return;
     const status = res.statusCode || 0;
     const ok = status < 400;
     const kind = c.kind === 'login' && !ok ? 'login_failed' : c.kind;

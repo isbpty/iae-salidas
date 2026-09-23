@@ -1,7 +1,7 @@
 /* R1: los comandos de solo lectura no invalidan la vista de todos (bump: false). */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { makeTestApp } from '../test-helpers.js';
+import { makeTestApp, PNG_1x1 as png } from '../test-helpers.js';
 
 test('los comandos de lectura no suben app_meta.revision; los que cambian datos sí', async () => {
   const t = await makeTestApp();
@@ -19,5 +19,30 @@ test('los comandos de lectura no suben app_meta.revision; los que cambian datos 
 
   const { revision: r3 } = await t.run('send_day_summary', 'u_s1', {});
   assert.ok(r3 > r2, 'send_day_summary sí sube la revisión (crea un aviso a Dirección)');
+  await t.close();
+});
+
+/* S10: `add_authorization` en modo 'nueva' manda la cédula y el teléfono de la persona nueva en el input;
+   `runCommand` ahora reutiliza `maskInput` (el mismo enmascarado de la telemetría) en vez del `sanitize`
+   que solo truncaba strings largos. */
+test('runCommand enmascara cédula/teléfono en audit_log.input (maskInput, no solo truncar)', async () => {
+  const t = await makeTestApp();
+  const { result: up } = await t.run('upload_attachment', 'u_p1', { purpose: 'foto', mime: 'image/png', name: 'nana.png', dataBase64: png });
+  await t.run('add_authorization', 'u_p1', {
+    studentIds: ['e1'], mode: 'nueva', name: 'Rosa Nana', relation: 'Niñera', cedula: '8-1-1', phone: '+507 6000-1000',
+    attachmentId: up.attachmentId, type: 'siempre',
+  });
+  const [row] = await t.db.query("SELECT input FROM audit_log WHERE command = 'add_authorization' ORDER BY id DESC LIMIT 1");
+  assert.equal(row.input.cedula, '***'); assert.equal(row.input.phone, '***');
+  assert.equal(row.input.name, 'Rosa Nana', 'lo que no es secreto sigue legible');
+  await t.close();
+});
+
+/* R7: "marcar leído" es, con mucho, el comando más frecuente (L10); no deja fila en audit_log. */
+test('mark_notifications_read no deja fila en audit_log', async () => {
+  const t = await makeTestApp();
+  await t.run('mark_notifications_read', 'u_p1', {});
+  const rows = await t.db.query("SELECT id FROM audit_log WHERE command = 'mark_notifications_read'");
+  assert.equal(rows.length, 0);
   await t.close();
 });

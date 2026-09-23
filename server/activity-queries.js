@@ -2,19 +2,27 @@
    tiempo paginada y exportación CSV. Todo sale de activity_events con SQL; nada se agrega en memoria
    salvo la lista final. */
 import { listTesters } from './testers.js';
+import { HttpError } from './domain/errors.js';
 
 export const SESSION_GAP_MIN = 10;
 export const ONLINE_MS = 2 * 60 * 1000;
 const MAX_EVENTS = 200;
 const MAX_EXPORT = 20000;
 
+/* S12: `new Date(f.from).toISOString()` lanzaba RangeError (→ 500) con una fecha inválida; ahora es un
+   400 invalid_range explícito, igual que cualquier otro dato de entrada mal formado. */
+function parseFilterDate(v) {
+  const d = new Date(v);
+  if (isNaN(d.getTime())) throw new HttpError(400, 'invalid_range');
+  return d.toISOString();
+}
 /* Filtros comunes → cláusula WHERE parametrizada. `testerId: 'shared'` = sesiones con el PIN compartido. */
 function where(f = {}, params = [], alias = '') {
   const c = ['1=1'];
   const add = (sql, v) => { params.push(v); c.push(sql.replace('?', '$' + params.length)); };
   const col = (name) => alias + name;
-  if (f.from) add(col('at') + ' >= ?', new Date(f.from).toISOString());
-  if (f.to) add(col('at') + ' <= ?', new Date(f.to).toISOString());
+  if (f.from) add(col('at') + ' >= ?', parseFilterDate(f.from));
+  if (f.to) add(col('at') + ' <= ?', parseFilterDate(f.to));
   if (f.testerId === 'shared') c.push(col('tester_id') + ' IS NULL');
   else if (f.testerId) add(col('tester_id') + ' = ?', f.testerId);
   if (f.userId) add(col('user_id') + ' = ?', f.userId);
@@ -22,7 +30,11 @@ function where(f = {}, params = [], alias = '') {
   if (f.sid) add(col('sid') + ' = ?', f.sid);
   if (f.kind) add(col('kind') + ' = ?', f.kind);
   if (f.source) add(col('source') + ' = ?', f.source);
-  if (f.errorsOnly) c.push(`(${col('ok')} = false OR ${col('kind')} IN ('js_error','promise_rejection'))`);
+  /* S12: `errorsOnly=false` (string) es verdadero para cualquier string no vacío; solo 'true'/'1' activan
+     el filtro. S7: el lado "ok = false" solo cuenta si el evento es del servidor -- un cliente ya no puede
+     mandar `kind: 'command'` (lista blanca en activity.js), pero una fila `ok: false` de otro kind de
+     cliente tampoco debe aparecer como error del servidor. */
+  if (f.errorsOnly === 'true' || f.errorsOnly === '1') c.push(`((${col('ok')} = false AND ${col('source')} = 'server') OR ${col('kind')} IN ('js_error','promise_rejection'))`);
   if (f.q) {
     params.push('%' + String(f.q).replace(/[%_\\]/g, (m) => '\\' + m) + '%');
     const n = '$' + params.length;
@@ -91,9 +103,12 @@ export async function summary(q, f = {}, now = new Date()) {
 
   const params = [];
   const w = where(f, params);
+  /* S7: solo un evento realmente del servidor (source='server') cuenta como "acción" o como "error del
+     servidor"; un `kind` de cliente falso ya no pasa la lista blanca de activity.js, pero esto además cubre
+     filas antiguas y cualquier otro kind con `ok: false` que un cliente pudiera mandar. */
   const [last] = [await q.query(`SELECT coalesce(tester_id, '') AS tid, max(at) AS last_at,
-      sum(CASE WHEN kind = 'command' AND ok THEN 1 ELSE 0 END)::int AS actions,
-      sum(CASE WHEN ok = false OR kind IN ('js_error','promise_rejection') THEN 1 ELSE 0 END)::int AS errors,
+      sum(CASE WHEN kind = 'command' AND ok AND source = 'server' THEN 1 ELSE 0 END)::int AS actions,
+      sum(CASE WHEN (ok = false AND source = 'server') OR kind IN ('js_error','promise_rejection') THEN 1 ELSE 0 END)::int AS errors,
       count(*)::int AS events
     FROM activity_events WHERE ${w} GROUP BY 1`, params)];
   const byTester = new Map(last.map((r) => [r.tid, r]));
@@ -153,14 +168,14 @@ export async function summary(q, f = {}, now = new Date()) {
   const actions = (await q.query(`SELECT name, count(*)::int AS count,
       percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms) AS p50, percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) AS p95,
       max(duration_ms) AS max, sum(CASE WHEN ok = false THEN 1 ELSE 0 END)::int AS errors
-    FROM activity_events WHERE ${w3} AND kind = 'command' GROUP BY name ORDER BY count DESC LIMIT 100`, p3))
+    FROM activity_events WHERE ${w3} AND kind = 'command' AND source = 'server' GROUP BY name ORDER BY count DESC LIMIT 100`, p3))
     .map((r) => ({ name: r.name, count: num(r.count), p50: ms(r.p50), p95: ms(r.p95), max: ms(r.max), errors: num(r.errors) }));
   const p4 = []; const w4 = where(f, p4);
   const clicks = (await q.query(`SELECT name, count(*)::int AS count FROM activity_events WHERE ${w4} AND kind = 'click' GROUP BY name ORDER BY count DESC LIMIT 60`, p4))
     .map((r) => ({ name: r.name, count: num(r.count) }));
   const p5 = []; const w5 = where(f, p5);
   const errors = (await q.query(`SELECT coalesce(error, '?') AS error, kind, name, count(*)::int AS count, max(at) AS last_at, array_agg(DISTINCT coalesce(tester_id, '')) AS testers
-    FROM activity_events WHERE ${w5} AND (ok = false OR kind IN ('js_error','promise_rejection')) GROUP BY error, kind, name ORDER BY count DESC, last_at DESC LIMIT 100`, p5))
+    FROM activity_events WHERE ${w5} AND ((ok = false AND source = 'server') OR kind IN ('js_error','promise_rejection')) GROUP BY error, kind, name ORDER BY count DESC, last_at DESC LIMIT 100`, p5))
     .map((r) => ({ error: r.error, kind: r.kind, name: r.name, count: num(r.count), lastAt: new Date(r.last_at).toISOString(), testers: (r.testers || []).map((id) => testerName(id || null)) }));
   const p6 = []; const w6 = where(f, p6);
   const abandons = (await q.query(`SELECT name, count(*)::int AS count FROM activity_events WHERE ${w6} AND kind = 'form_abandon' GROUP BY name ORDER BY count DESC LIMIT 30`, p6))
@@ -212,7 +227,13 @@ export async function events(q, f = {}) {
 }
 
 const COLS = ['id', 'at', 'testerId', 'userId', 'role', 'sid', 'source', 'kind', 'name', 'screen', 'target', 'durationMs', 'ok', 'error', 'status', 'revision', 'ip', 'city', 'country', 'fp', 'data'];
-const cell = (v) => { const s = v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v); return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+/* S8: una celda que empiece con `=`, `+`, `-`, `@`, tab o CR se interpreta como fórmula al abrirla en Excel/
+   Sheets (inyección de fórmulas); anteponerle un apóstrofo la deja como texto sin cambiar lo que se ve. */
+const cell = (v) => {
+  let s = v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v);
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+  return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+};
 export async function exportCsv(q, f = {}) {
   const params = [];
   const w = where(f, params);

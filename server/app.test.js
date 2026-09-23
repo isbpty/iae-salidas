@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { makeTestApp, call, loginAs } from './test-helpers.js';
+import { makeTestApp, call, loginAs, loginSuper } from './test-helpers.js';
 
 test('health, options and login lifecycle', async () => {
   const t = await makeTestApp(); const { base, close } = await t.listen();
@@ -151,6 +151,44 @@ test('R4/R1: cuando la revisión cambió, el sondeo sí construye la vista compl
   const res = await call(base, '/api/me/view', { cookie, headers: { 'if-none-match': staleEtag } });
   assert.equal(res.status, 200);
   assert.ok(res.json.view.requests.length >= 1);
+  await close(); await t.close();
+});
+
+test('R8: un 200 de sondeo (x-iae-poll) en me/view no deja fila de actividad; la carga inicial sí', async () => {
+  const t = await makeTestApp(); const { base, close } = await t.listen();
+  const cookie = await loginAs(base, 'u_p1');
+  const first = await call(base, '/api/me/view', { cookie }); // carga inicial: sin el header, se registra
+  const staleEtag = first.headers.get('etag');
+  await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '13:00', pickupBy: 'p1', reason: 'x' });
+  const polled = await call(base, '/api/me/view', { cookie, headers: { 'if-none-match': staleEtag, 'x-iae-poll': '1' } });
+  assert.equal(polled.status, 200, 'sí cambió algo: no es un 304, es un 200 real del sondeo');
+  const views = await t.db.query("SELECT * FROM activity_events WHERE kind = 'view'");
+  assert.equal(views.length, 1, 'solo la carga inicial dejó fila; el 200 marcado como sondeo no');
+  await close(); await t.close();
+});
+
+test('R7: el resumen de /super purga sola la actividad de más de 30 días y la auditoría de más de 180, como mucho una vez por hora', async () => {
+  const t = await makeTestApp(); const { base, close } = await t.listen();
+  const { result: made } = await t.run('create_testers', 'u_s1');
+  const sup = await loginSuper(base, made[0].pin);
+  const now = t.clock.now;
+  const oldActivity = new Date(now.getTime() - 31 * 86400000).toISOString();
+  const recentActivity = new Date(now.getTime() - 5 * 86400000).toISOString();
+  const oldAudit = new Date(now.getTime() - 181 * 86400000).toISOString();
+  const recentAudit = new Date(now.getTime() - 10 * 86400000).toISOString();
+  await t.db.query(`INSERT INTO activity_events(at, source, kind, name, ok) VALUES ($1,'server','other','x',true), ($2,'server','other','y',true)`, [oldActivity, recentActivity]);
+  await t.db.query(`INSERT INTO audit_log(at, command) VALUES ($1,'old_cmd'), ($2,'recent_cmd')`, [oldAudit, recentAudit]);
+
+  await call(base, '/api/activity/summary', { cookie: sup });
+  const kept = await t.db.query("SELECT name FROM activity_events WHERE name IN ('x','y')");
+  assert.deepEqual(kept.map((r) => r.name), ['y'], 'solo se borra lo anterior a 30 días');
+  const auditKept = await t.db.query("SELECT command FROM audit_log WHERE command IN ('old_cmd','recent_cmd')");
+  assert.deepEqual(auditKept.map((r) => r.command), ['recent_cmd'], 'solo se borra la auditoría anterior a 180 días');
+
+  /* segunda llamada casi enseguida: el cooldown de una hora no vuelve a purgar aunque haya algo viejo */
+  await t.db.query(`INSERT INTO activity_events(at, source, kind, name, ok) VALUES ($1,'server','other','z',true)`, [oldActivity]);
+  await call(base, '/api/activity/summary', { cookie: sup });
+  assert.equal((await t.db.query("SELECT count(*)::int AS c FROM activity_events WHERE name = 'z'"))[0].c, 1, 'sin pasar una hora, no vuelve a purgar');
   await close(); await t.close();
 });
 

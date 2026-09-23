@@ -57,7 +57,9 @@ const api = (() => {
     switchUser: (userId) => req('/api/auth/switch', { method: 'POST', body: JSON.stringify({ userId }) }),
     activity: (what, params) => req('/api/activity/' + what + (params && params.toString() ? '?' + params.toString() : '')),
     logout: () => req('/api/auth/logout', { method: 'POST' }),
-    view: (etag) => req('/api/me/view', { headers: etag ? { 'if-none-match': etag } : {} }),
+    /* R8: `isPoll` manda `x-iae-poll: 1` para que el servidor no deje una fila de actividad por cada 200 del
+       sondeo (solo la carga inicial, sin este header, se registra; ver recordRequest en server/app.js). */
+    view: (etag, isPoll) => req('/api/me/view', { headers: { ...(etag ? { 'if-none-match': etag } : {}), ...(isPoll ? { 'x-iae-poll': '1' } : {}) } }),
     command: (name, input) => req('/api/commands/' + name, { method: 'POST', body: JSON.stringify(input || {}) }),
     /* Convierte un File en el cuerpo de upload_attachment; las imágenes se reducen a 640 px JPEG. */
     async filePayload(file, purpose) {
