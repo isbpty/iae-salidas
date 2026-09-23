@@ -58,3 +58,29 @@ export async function loginSuper(base, pin, key = CONFIG.superKey) {
   if (r.status !== 200) throw new Error('super login failed: ' + r.status + ' ' + (r.json && r.json.error));
   return r.headers.get('set-cookie').split(';')[0];
 }
+
+/* Counts every SQL statement `fn` causes on `db`, whether it runs through the top-level `db.query`
+   (outside a transaction) or through `q.query` inside a `db.tx(...)` block (every command and view
+   build runs in a transaction, so this is the path that matters for N+1 counting -- see R2/Task 6).
+   Restores the originals in a `finally` so a failing assertion never leaves `db` patched for the
+   next test.
+   `fn` receives a `mark()` function that clears the log collected so far -- a budget on "the
+   Recepción view" or "one command" is about the repo/projection queries R2 is about, not the fixed
+   `makeCtx` session bootstrap (getUser/getSettings/getPermissions/getStaff, identical for every
+   request regardless of role or dataset size); callers that want to exclude setup call `mark()`
+   right after it and before the part they're actually budgeting. */
+export async function countQueries(db, fn) {
+  const calls = [];
+  const origQuery = db.query;
+  const origTx = db.tx;
+  const mark = () => { calls.length = 0; };
+  db.query = (sql, params) => { calls.push(sql); return origQuery(sql, params); };
+  db.tx = (txFn) => origTx((q) => txFn({ ...q, query: (sql, params) => { calls.push(sql); return q.query(sql, params); } }));
+  try {
+    const result = await fn(mark);
+    return { result, count: calls.length, calls };
+  } finally {
+    db.query = origQuery;
+    db.tx = origTx;
+  }
+}

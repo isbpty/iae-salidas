@@ -10,7 +10,12 @@ export async function openDb({ databaseUrl, dataDir } = {}) {
   if (databaseUrl) {
     const { default: pg } = await import('pg');
     const local = /localhost|127\.0\.0\.1/.test(databaseUrl);
-    const pool = new pg.Pool({ connectionString: databaseUrl, ssl: local ? false : { rejectUnauthorized: true }, max: 3 });
+    /* R5: a serverless instance can sit idle between requests for a while before it's recycled --
+       without `idleTimeoutMillis` a pooled connection can outlive that idle stretch and hand back a
+       connection Neon (or the OS) already closed on its end, surfacing as a random query failure on
+       the next request instead of a clean reconnect. 10 s keeps a connection around across a quick
+       burst of requests but lets it go well before that. */
+    const pool = new pg.Pool({ connectionString: databaseUrl, ssl: local ? false : { rejectUnauthorized: true }, max: 3, idleTimeoutMillis: 10000 });
     return {
       kind: 'pg',
       ...wrap(pool, (sql) => pool.query(sql)),

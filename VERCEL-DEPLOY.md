@@ -1,6 +1,6 @@
 # Desplegar en Vercel con Neon
 
-1. **Neon**: crea un proyecto y una base `iae_salidas`. Copia la cadena de conexión con `?sslmode=require`.
+1. **Neon**: crea un proyecto y una base `iae_salidas`. Copia la cadena de conexión **del endpoint *pooled*** (el que Neon muestra con `-pooler` en el host, p. ej. `ep-xxxx-pooler.…`), con `?sslmode=require`. Cada instancia de Vercel abre su propio pool de hasta 3 conexiones (`server/db/client.js`); con varias instancias concurrentes el endpoint directo se queda sin conexiones rápido, y el *pooler* de Neon (PgBouncer) las multiplexa. Crea el proyecto de Neon en la misma región que el *deployment* de Vercel (la del proyecto, en *Settings → Functions → Region*) para no pagar la ida y vuelta entre regiones en cada consulta.
 2. **Vercel**: importa el repo `isbpty/iae-salidas` (rama `connected-pilot` o `main`). Framework: *Other*. Sin comando de build.
 3. **Variables de entorno** (Production y Preview):
    - `DATABASE_URL` = cadena de Neon

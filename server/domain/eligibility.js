@@ -1,4 +1,4 @@
-import { getStudent, getPerson, listAuthorizations, studentsOfPerson } from '../db/repo.js';
+import { listAuthorizations, studentsOfPerson } from '../db/repo.js';
 import { todayISO, shiftISO } from './time.js';
 
 export const todayOf = (ctx) => todayISO(ctx.now, ctx.tz);
@@ -39,19 +39,19 @@ export function withAuthExpiry(authorizations, ctx) {
 }
 
 export async function pickupEligibility(ctx, studentId, personId, date = todayOf(ctx)) {
-  const st = await getStudent(ctx.q, studentId);
+  const st = await ctx.getStudent(studentId);
   if (!st || !personId) return { ok: false };
   if (st.titulares.includes(personId)) return { ok: true, kind: 'titular' };
   const a = (await listAuthorizations(ctx.q, { studentIds: [studentId], personId })).find((x) => isAuthActive(x, date, ctx.tz));
   return a ? { ok: true, kind: a.type, auth: a } : { ok: false };
 }
 export async function pickupCandidates(ctx, studentId, date = todayOf(ctx)) {
-  const st = await getStudent(ctx.q, studentId);
+  const st = await ctx.getStudent(studentId);
   if (!st) return [];
   const list = [];
-  for (const id of st.titulares) list.push({ person: await getPerson(ctx.q, id), kind: 'titular' });
+  for (const id of st.titulares) list.push({ person: await ctx.getPerson(id), kind: 'titular' });
   for (const a of await listAuthorizations(ctx.q, { studentIds: [studentId], includeRevoked: false })) {
-    if (isAuthActive(a, date, ctx.tz)) list.push({ person: await getPerson(ctx.q, a.personId), kind: a.type, auth: a });
+    if (isAuthActive(a, date, ctx.tz)) list.push({ person: await ctx.getPerson(a.personId), kind: a.type, auth: a });
   }
   return list;
 }
@@ -60,7 +60,7 @@ export async function authorizedFor(ctx, personId) {
   const out = [];
   for (const a of await listAuthorizations(ctx.q, { personId, includeRevoked: false })) {
     if (!isAuthActive(a, today, ctx.tz)) continue;
-    const st = await getStudent(ctx.q, a.studentId);
+    const st = await ctx.getStudent(a.studentId);
     if (st && !st.titulares.includes(personId)) out.push({ auth: a, student: st });
   }
   return out;

@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from './client.js';
-import { migrate } from './migrate.js';
+import { migrate, bootstrap } from './migrate.js';
 import { MIGRATIONS } from './schema.js';
+import { countQueries } from '../test-helpers.js';
 
 test('migrate creates the schema once and is idempotent', async () => {
   const db = await openDb({});
@@ -14,6 +15,24 @@ test('migrate creates the schema once and is idempotent', async () => {
   }
   const applied = await db.query('SELECT version FROM schema_migrations');
   assert.equal(applied.length, MIGRATIONS.length);
+  await db.close();
+});
+
+/* R5: on a warm instance `bootstrap` should not take the advisory lock (a real transaction, with a
+   real `pg_advisory_xact_lock` round trip on Postgres) or touch the seed at all once the schema is
+   current and the demo data is present -- only the one un-locked check. */
+test('bootstrap no toma el lock ni re-siembra en una instancia tibia', async () => {
+  const db = await openDb({});
+  const env = { now: new Date('2026-09-18T15:30:00Z'), tz: 'America/Panama' };
+  await bootstrap(db, env); // cold: migrates and seeds
+  const before = (await db.query('SELECT count(*)::int AS c FROM users'))[0].c;
+  assert.ok(before > 0, 'the cold bootstrap seeded demo users');
+
+  const { count, calls } = await countQueries(db, () => bootstrap(db, env));
+  assert.ok(!calls.some((s) => /INSERT|UPDATE|DELETE/i.test(s)), 'a warm bootstrap writes nothing:\n' + calls.join('\n'));
+  assert.ok(count <= 2, 'a warm bootstrap is one or two un-locked reads, not a migrate+seed pass: ' + count + '\n' + calls.join('\n'));
+  const after = (await db.query('SELECT count(*)::int AS c FROM users'))[0].c;
+  assert.equal(after, before, 'nothing got re-seeded');
   await db.close();
 });
 

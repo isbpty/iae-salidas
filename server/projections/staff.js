@@ -1,4 +1,4 @@
-import { listStudents, listPersons, listAuthorizations, listRequests, listNotifications, listStaff, listRoutes, listTripsOn, listAudit, listUsers, listAllChats, listConversations } from '../db/repo.js';
+import { listStudents, listPersons, listAuthorizations, listRequests, listNotificationsForStaff, listStaff, listRoutes, listTripsOn, listAudit, listUsers, listAllChats, listConversations } from '../db/repo.js';
 import { todayOf, withAuthExpiry } from '../domain/eligibility.js';
 import { withExpired } from '../domain/requests.js';
 import { publicPerson } from './parent.js';
@@ -52,7 +52,7 @@ export async function staffView(ctx) {
   const routes = can(ctx, 'ver_rutas') ? (me.routeId ? allRoutes.filter((r) => r.id === me.routeId) : allRoutes) : [];
   const routeIds = new Set(routes.map((r) => r.id));
   const trips = (await listTripsOn(ctx.q, today)).filter((t) => routeIds.has(t.routeId));
-  const notifications = [...(await listNotifications(ctx.q, { role })), ...(await listNotifications(ctx.q, { staffId: me.id }))].sort((a, b) => a.ts - b.ts || String(a.id).localeCompare(String(b.id)));
+  const notifications = await listNotificationsForStaff(ctx.q, role, me.id);
   const staff = await listStaff(ctx.q);
   return {
     me,

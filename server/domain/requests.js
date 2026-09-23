@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { uid } from './ids.js';
 import { HttpError, notFound, conflict, badRequest } from './errors.js';
-import { insertRequest, getRequest, patchRow, addRequestEvent, getStudent, getPerson, getStaff, listRequests, upsertConfirmation, setConversation, getConversation, clearConversation } from '../db/repo.js';
+import { insertRequest, getRequest, hydrateRequests, patchRow, addRequestEvent, getStaff, listRequests, upsertConfirmation, setConversation, getConversation, clearConversation } from '../db/repo.js';
 import { notifyPerson, notifyRole, notifyTeachers, logEvent } from './notifications.js';
 import { pickupEligibility, pickupCandidates, todayOf } from './eligibility.js';
 import { evaluateAutoApprove } from './autoapprove.js';
@@ -15,7 +15,7 @@ export function describePickup(req, pk) {
 const hist = (ctx, req, text) => addRequestEvent(ctx.q, req.id, ctx.now, text);
 const randomCode = () => String(crypto.randomInt(1000, 10000));
 async function uniqueCode(ctx, date) {
-  const used = new Set((await listRequests(ctx.q, { date, kind: 'salida' })).map((r) => r.code));
+  const used = new Set((await listRequests(ctx.q, { date, kind: 'salida', hydrate: false })).map((r) => r.code));
   let c = randomCode();
   while (used.has(c)) c = randomCode();
   return c;
@@ -42,9 +42,9 @@ export function withExpired(requests, today) {
 }
 async function loadSalida(ctx, id) {
   /* Lock the row for the rest of the transaction so two garita officers cannot both read
-     `aprobada` and both write a transition. */
-  await ctx.q.query('SELECT id FROM requests WHERE id=$1 FOR UPDATE', [id]);
-  const req = await getRequest(ctx.q, id);
+     `aprobada` and both write a transition -- the lock and the hydrated read used to be two
+     separate queries; `FOR UPDATE` on the hydrating `SELECT *` itself does both in one (R2). */
+  const req = (await hydrateRequests(ctx.q, await ctx.q.query('SELECT * FROM requests WHERE id=$1 FOR UPDATE', [id])))[0] || null;
   if (!req) notFound('request_not_found');
   return req;
 }
@@ -111,9 +111,9 @@ export async function releaseConfirmState(ctx, personId, requestId) {
 }
 
 export async function createRequest(ctx, data) {
-  const st = await getStudent(ctx.q, data.studentId);
+  const st = await ctx.getStudent(data.studentId);
   if (!st) notFound('student_not_found');
-  const by = await getPerson(ctx.q, data.requestedBy);
+  const by = await ctx.getPerson(data.requestedBy);
   if (!by) notFound('person_not_found');
   if (!isValidDate(data.date)) badRequest('invalid_date');
   const req = { id: uid('r'), kind: data.kind, studentId: st.id, requestedBy: by.id, date: data.date, reason: String(data.reason || ''), channel: data.channel === 'whatsapp' ? 'whatsapp' : 'web', status: 'pendiente', createdAt: ctx.now, autoApproved: false };
@@ -139,13 +139,16 @@ export async function createRequest(ctx, data) {
   const ch = CHANNEL[req.channel];
   const others = st.titulares.filter((t) => t !== by.id);
   if (req.kind === 'salida') {
-    const pk = await getPerson(ctx.q, req.pickupBy);
+    const pk = await ctx.getPerson(req.pickupBy);
     await hist(ctx, req, 'Solicitud creada por ' + by.name + ' vía ' + ch);
     await logEvent(ctx, 'Solicitud de salida de ' + st.name + ' creada por ' + by.name + ' (' + ch + ')');
     for (const t of others) await notifyPerson(ctx, t, 'ℹ️ ' + by.name + ' solicitó salida de ' + st.name + ' ' + fmtDate(ctx, req.date) + ' a las ' + fmtTime(req.time) + '. Retira: ' + describePickup(req, pk) + '.');
     const ev = await evaluateAutoApprove(ctx, req, st);
     if (ev.ok) {
-      await approveRequest(ctx, req.id, { auto: true, pickupPoint: ctx.settings.defaultPickupPoint });
+      /* `approveRequest` already re-reads and returns the hydrated, approved row -- reusing that
+         instead of falling through to the `getRequest` below avoids a second, identical hydrate
+         (main select + history + confirmations) for the same request (R2). */
+      return approveRequest(ctx, req.id, { auto: true, pickupPoint: ctx.settings.defaultPickupPoint });
     } else {
       await hist(ctx, req, 'Pendiente de revisión: ' + ev.reason);
       await notifyPerson(ctx, by.id, '📝 Recibimos tu solicitud de salida de ' + st.name + ' ' + fmtDate(ctx, req.date) + ' a las ' + fmtTime(req.time) + '. Te avisamos en cuanto la escuela la apruebe.');
@@ -167,8 +170,8 @@ export async function approveRequest(ctx, id, opts = {}) {
   const req = await loadSalida(ctx, id);
   if (req.kind !== 'salida' || req.status !== 'pendiente') conflict('request_not_pending');
   if (req.date < todayOf(ctx)) conflict('date_in_past');
-  const st = await getStudent(ctx.q, req.studentId);
-  const pk = await getPerson(ctx.q, req.pickupBy);
+  const st = await ctx.getStudent(req.studentId);
+  const pk = await ctx.getPerson(req.pickupBy);
   if (!pk) conflict('pickup_person_missing');
   const el = await pickupEligibility(ctx, req.studentId, req.pickupBy, req.date);
   if (!el.ok) conflict('pickup_no_longer_eligible');
@@ -207,7 +210,7 @@ export async function approveRequest(ctx, id, opts = {}) {
 export async function rejectRequest(ctx, id, reason, byStaffId) {
   const req = await loadSalida(ctx, id);
   if (req.status !== 'pendiente') conflict('request_not_pending');
-  const st = await getStudent(ctx.q, req.studentId);
+  const st = await ctx.getStudent(req.studentId);
   const staff = await getStaff(ctx.q, byStaffId);
   await patchRow(ctx.q, 'requests', id, { status: 'rechazada', decidedAt: ctx.now, decidedBy: byStaffId, rejectReason: reason });
   await hist(ctx, req, 'Rechazada por ' + staff.name + ': ' + reason);
@@ -223,7 +226,7 @@ export async function rejectRequest(ctx, id, reason, byStaffId) {
 export async function acceptExcusa(ctx, id, byStaffId) {
   const req = await loadSalida(ctx, id);
   if (req.kind !== 'excusa' || req.status !== 'pendiente') conflict('request_not_pending');
-  const st = await getStudent(ctx.q, req.studentId);
+  const st = await ctx.getStudent(req.studentId);
   const staff = await getStaff(ctx.q, byStaffId);
   await patchRow(ctx.q, 'requests', id, { status: 'aceptada', decidedAt: ctx.now, decidedBy: byStaffId });
   await hist(ctx, req, 'Aceptada por ' + staff.name);
@@ -236,8 +239,8 @@ export async function acceptExcusa(ctx, id, byStaffId) {
 export async function cancelRequest(ctx, id, personId) {
   const req = await loadSalida(ctx, id);
   if (!['pendiente', 'aprobada'].includes(req.status)) conflict('request_not_cancellable');
-  const st = await getStudent(ctx.q, req.studentId);
-  const p = await getPerson(ctx.q, personId);
+  const st = await ctx.getStudent(req.studentId);
+  const p = await ctx.getPerson(personId);
   await patchRow(ctx.q, 'requests', id, { status: 'cancelada' });
   await hist(ctx, req, 'Cancelada por ' + p.name);
   await logEvent(ctx, 'Canceló solicitud de ' + st.name, p.name);
@@ -252,7 +255,7 @@ export async function cancelRequest(ctx, id, personId) {
 export async function staffCancelRequest(ctx, id, reason, byStaffId) {
   const req = await loadSalida(ctx, id);
   if (!['pendiente', 'aprobada'].includes(req.status)) conflict('request_not_cancellable');
-  const st = await getStudent(ctx.q, req.studentId);
+  const st = await ctx.getStudent(req.studentId);
   const staff = await getStaff(ctx.q, byStaffId);
   const wasApproved = req.status === 'aprobada';
   await patchRow(ctx.q, 'requests', id, { status: 'cancelada' });
@@ -264,7 +267,7 @@ export async function staffCancelRequest(ctx, id, reason, byStaffId) {
     await releasePickupState(ctx, t, id);
   }
   if (wasApproved && req.pickupBy) {
-    const pk = await getPerson(ctx.q, req.pickupBy);
+    const pk = await ctx.getPerson(req.pickupBy);
     if (pk && pk.hasAccount && !st.titulares.includes(pk.id)) {
       await notifyPerson(ctx, pk.id, '⛔ La salida de ' + st.name + ' que ibas a retirar fue cancelada por el personal. Motivo: ' + reason + '.');
     }
@@ -282,8 +285,8 @@ export async function requestConfirmation(ctx, id, byStaffId) {
      (a revocation followed by a new una_vez authorization, for instance). */
   const current = await pickupEligibility(ctx, req.studentId, req.pickupBy, req.date);
   if (current.kind !== 'una_vez') conflict('confirmation_not_needed');
-  const st = await getStudent(ctx.q, req.studentId);
-  const pk = await getPerson(ctx.q, req.pickupBy);
+  const st = await ctx.getStudent(req.studentId);
+  const pk = await ctx.getPerson(req.pickupBy);
   const staff = await getStaff(ctx.q, byStaffId);
   await upsertConfirmation(ctx.q, { requestId: id, status: 'pendiente', requestedByStaff: byStaffId, requestedAt: ctx.now, answeredByPerson: null, answeredAt: null });
   await hist(ctx, req, 'Garita solicitó confirmación a los titulares (' + pk.name + ' presente)');
@@ -311,9 +314,9 @@ export async function confirmPickup(ctx, id, personId, yes) {
   if (!req.confirmation || req.confirmation.status !== 'pendiente') {
     conflict(req.confirmation && req.confirmation.status === 'negada' ? 'pickup_denied' : 'confirmation_not_requested');
   }
-  const st = await getStudent(ctx.q, req.studentId);
-  const pk = await getPerson(ctx.q, req.pickupBy);
-  const p = await getPerson(ctx.q, personId);
+  const st = await ctx.getStudent(req.studentId);
+  const pk = await ctx.getPerson(req.pickupBy);
+  const p = await ctx.getPerson(personId);
   await upsertConfirmation(ctx.q, { requestId: id, status: yes ? 'confirmada' : 'negada', requestedByStaff: null, requestedAt: null, answeredByPerson: personId, answeredAt: ctx.now });
   await hist(ctx, req, (yes ? 'Entrega confirmada' : 'Entrega NEGADA') + ' por ' + p.name);
   await logEvent(ctx, (yes ? 'Confirmó' : 'Negó') + ' la entrega de ' + st.name + ' a ' + pk.name, p.name);
@@ -330,8 +333,8 @@ export async function markExit(ctx, id, byStaffId) {
   const req = await loadSalida(ctx, id);
   if (req.kind !== 'salida' || req.status !== 'aprobada') conflict('request_not_approved');
   if (req.date !== todayOf(ctx)) throw new HttpError(409, 'not_today', 'Esta salida es del ' + fmtDate(ctx, req.date) + ', no se puede marcar el retiro hoy.');
-  const st = await getStudent(ctx.q, req.studentId);
-  const pk = await getPerson(ctx.q, req.pickupBy);
+  const st = await ctx.getStudent(req.studentId);
+  const pk = await ctx.getPerson(req.pickupBy);
   const officer = await getStaff(ctx.q, byStaffId);
   const el = await pickupEligibility(ctx, req.studentId, req.pickupBy, req.date);
   if (!el.ok) throw new HttpError(409, 'pickup_not_authorized', pk.name + ' ya no tiene autorización vigente para ' + st.name + '.');

@@ -64,16 +64,24 @@ export const getUser = async (q, id) => one(await q.query('SELECT * FROM users W
 export const getPerson = async (q, id) => one(await q.query('SELECT * FROM persons WHERE id=$1', [id]));
 export const listPersons = async (q) => all(await q.query('SELECT * FROM persons ORDER BY id'));
 
-async function withTitulares(q, rows) {
-  if (!rows.length) return [];
-  const map = {};
-  for (const g of await q.query('SELECT student_id, person_id FROM guardianships ORDER BY person_id')) (map[g.student_id] ||= []).push(g.person_id);
-  return rows.map(camel).map((s) => ({ ...s, titulares: map[s.id] || [] }));
+/* `titulares` used to be a second, unfiltered `SELECT * FROM guardianships` -- every `getStudent`
+   (create_salida calls it ~8 times) or `studentsOfPerson` read all 1 000+ rows of the table just to
+   pick out one student's guardians (R2). A `LEFT JOIN … array_agg` folds that into the same query as
+   the student row(s), so a single lookup is one query instead of two, and a batch (`listStudents`)
+   stays one query regardless of how many students it returns -- `GROUP BY s.id` is enough for
+   Postgres to allow every other `s.*` column by primary-key functional dependency. */
+const TITULARES_AGG = "COALESCE(array_agg(g.person_id ORDER BY g.person_id) FILTER (WHERE g.person_id IS NOT NULL), '{}') AS titulares";
+const rowsWithTitulares = (rows) => rows.map((r) => { const s = camel(r); return { ...s, titulares: s.titulares || [] }; });
+export const listStudents = async (q) => rowsWithTitulares(await q.query(
+  `SELECT s.*, ${TITULARES_AGG} FROM students s LEFT JOIN guardianships g ON g.student_id = s.id GROUP BY s.id ORDER BY s.id`));
+export async function getStudent(q, id) {
+  const rows = await q.query(`SELECT s.*, ${TITULARES_AGG} FROM students s LEFT JOIN guardianships g ON g.student_id = s.id WHERE s.id=$1 GROUP BY s.id`, [id]);
+  return rows.length ? rowsWithTitulares(rows)[0] : null;
 }
-export const listStudents = async (q) => withTitulares(q, await q.query('SELECT * FROM students ORDER BY id'));
-export async function getStudent(q, id) { return (await withTitulares(q, await q.query('SELECT * FROM students WHERE id=$1', [id])))[0] || null; }
 export async function studentsOfPerson(q, personId) {
-  return withTitulares(q, await q.query('SELECT s.* FROM students s JOIN guardianships g ON g.student_id = s.id WHERE g.person_id=$1 ORDER BY s.id', [personId]));
+  return rowsWithTitulares(await q.query(
+    `SELECT s.*, ${TITULARES_AGG} FROM students s JOIN guardianships own ON own.student_id = s.id AND own.person_id=$1
+     LEFT JOIN guardianships g ON g.student_id = s.id GROUP BY s.id ORDER BY s.id`, [personId]));
 }
 
 /* ---------- requests ---------- */
@@ -89,14 +97,18 @@ export async function hydrateRequests(q, rows) {
 }
 export const insertRequest = (q, r) => insertRow(q, 'requests', r);
 export async function getRequest(q, id) { return (await hydrateRequests(q, await q.query('SELECT * FROM requests WHERE id=$1', [id])))[0] || null; }
-export async function listRequests(q, { studentIds, date, kind, status } = {}) {
+/* `hydrate: false` skips the history/confirmation batch (2 extra queries) for callers that only
+   need `code`/`status`/`date`/etc -- `uniqueCode` and the duplicate/rejected checks in
+   `autoapprove.js` (R2) -- and never touch `.history`/`.confirmation` on the result. */
+export async function listRequests(q, { studentIds, date, kind, status, hydrate = true } = {}) {
   const where = [], params = [];
   if (studentIds) { if (!studentIds.length) return []; where.push(`student_id IN (${marks(studentIds.length, params.length + 1)})`); params.push(...studentIds); }
   if (date) { params.push(date); where.push(`date=$${params.length}`); }
   if (kind) { params.push(kind); where.push(`kind=$${params.length}`); }
   if (status) { params.push(status); where.push(`status=$${params.length}`); }
   const sql = 'SELECT * FROM requests' + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY created_at DESC, id DESC';
-  return hydrateRequests(q, await q.query(sql, params));
+  const rows = await q.query(sql, params);
+  return hydrate ? hydrateRequests(q, rows) : all(rows);
 }
 export const addRequestEvent = (q, requestId, at, text) => insertRow(q, 'request_events', { requestId, at, text });
 export async function upsertConfirmation(q, row) {
@@ -130,6 +142,11 @@ export async function listNotifications(q, target) {
 export async function markNotificationsRead(q, target, at) {
   const params = [at.toISOString()]; const w = targetWhere(target, params);
   await q.query(`UPDATE notifications SET read_at=$1 WHERE read_at IS NULL AND ${w}`, params);
+}
+/* Staff views need both "notices for my role" and "notices for me by staff id" -- two separate
+   `listNotifications` calls before. One `role=$1 OR staff_id=$2` query returns the same rows. */
+export async function listNotificationsForStaff(q, role, staffId) {
+  return all(await q.query('SELECT * FROM notifications WHERE role=$1 OR staff_id=$2 ORDER BY created_at, seq', [role, staffId])).map((n) => ({ ...n, ts: n.createdAt, read: !!n.readAt }));
 }
 
 /* ---------- chat & conversation ---------- */
@@ -176,17 +193,32 @@ export const insertAudit = (q, row) => insertRow(q, 'audit_log', row);
 export const listAudit = async (q, limit = 500) => all(await q.query('SELECT * FROM audit_log WHERE summary IS NOT NULL ORDER BY id DESC LIMIT $1', [limit])).map((a) => ({ ...a, ts: a.at, actor: a.actorName, text: a.summary }));
 
 /* ---------- bus ---------- */
-export async function listRoutes(q) {
-  const routes = all(await q.query('SELECT * FROM routes ORDER BY id'));
-  const stops = all(await q.query('SELECT * FROM stops ORDER BY route_id, position'));
-  return routes.map((r) => ({ ...r, monitorId: r.monitorStaffId, stops: stops.filter((s) => s.routeId === r.id) }));
+/* `getRoute` used to build the full route list (routes + all stops) just to `find` one by id (R2).
+   A `LEFT JOIN … json_agg` folds routes and their stops into one query, shared by `listRoutes`
+   (still every route, still one query) and `getRoute` (`WHERE id=$1`, one query, no full scan). */
+const ROUTE_WITH_STOPS = `SELECT r.*, COALESCE(
+    json_agg(json_build_object('id', st.id, 'route_id', st.route_id, 'position', st.position, 'name', st.name, 'lat', st.lat, 'lng', st.lng) ORDER BY st.position) FILTER (WHERE st.id IS NOT NULL),
+    '[]'
+  ) AS stops FROM routes r LEFT JOIN stops st ON st.route_id = r.id`;
+const routeRow = (r) => { const c = camel(r); return { ...c, monitorId: c.monitorStaffId, stops: (c.stops || []).map(camel) }; };
+export async function listRoutes(q) { return (await q.query(ROUTE_WITH_STOPS + ' GROUP BY r.id ORDER BY r.id')).map(routeRow); }
+export async function getRoute(q, id) {
+  const rows = await q.query(ROUTE_WITH_STOPS + ' WHERE r.id=$1 GROUP BY r.id', [id]);
+  return rows.length ? routeRow(rows[0]) : null;
 }
-export async function getRoute(q, id) { return (await listRoutes(q)).find((r) => r.id === id) || null; }
+/* Boardings and opt-outs used to be two separate `IN (...)` batch queries per call (findTrip,
+   listTripsOn, ensureTrip). A `UNION ALL` with a discriminator column returns both in one query;
+   the row shapes differ (opt-outs have no status/stop/staff), so the unused columns are padded with
+   NULL/'' on each side. */
 async function hydrateTrips(q, rows) {
   if (!rows.length) return [];
   const ids = rows.map((t) => t.id);
-  const b = await q.query(`SELECT * FROM trip_boardings WHERE trip_id IN (${marks(ids.length)})`, ids);
-  const o = await q.query(`SELECT * FROM bus_opt_outs WHERE trip_id IN (${marks(ids.length)}) ORDER BY at`, ids);
+  const events = await q.query(
+    `SELECT 'board' AS src, trip_id, student_id, status, stop_id, by_staff_id, at, NULL::text AS by_person_id FROM trip_boardings WHERE trip_id = ANY($1)
+     UNION ALL
+     SELECT 'opt' AS src, trip_id, student_id, NULL, NULL, NULL, at, by_person_id FROM bus_opt_outs WHERE trip_id = ANY($1) ORDER BY at`, [ids]);
+  const b = events.filter((x) => x.src === 'board');
+  const o = events.filter((x) => x.src === 'opt');
   return rows.map(camel).map((t) => ({
     ...t,
     boarded: Object.fromEntries(b.filter((x) => x.trip_id === t.id).map((x) => [x.student_id, { status: x.status, ts: new Date(x.at).getTime(), by: x.by_staff_id, stopId: x.stop_id }])),
@@ -212,6 +244,18 @@ export async function insertOptOut(q, tripId, studentId, personId, at) {
 /* ---------- attachments ---------- */
 export const insertAttachment = (q, a) => insertRow(q, 'attachments', a);
 export const getAttachment = async (q, id) => one(await q.query('SELECT * FROM attachments WHERE id=$1', [id]));
+/* `canSeeAttachment` used to re-run `listRequests` (hydrated, with history/confirmations) for the
+   whole day or the whole school just to `.some`/`.filter` one boolean out of it -- once per image
+   the gate/teacher screen shows (R2). These answer the same question with a single `EXISTS`. */
+export async function existsApprovedPickupToday(q, date, pickupBy) {
+  const r = await q.query("SELECT 1 FROM requests WHERE date=$1 AND kind='salida' AND status IN ('aprobada','retirado') AND pickup_by=$2 LIMIT 1", [date, pickupBy]);
+  return r.length > 0;
+}
+export async function existsExcusaForTeacher(q, attachmentId, grades) {
+  if (!grades || !grades.length) return false;
+  const r = await q.query("SELECT 1 FROM requests r JOIN students s ON s.id = r.student_id WHERE r.kind='excusa' AND r.attachment_id=$1 AND s.grade = ANY($2) LIMIT 1", [attachmentId, grades]);
+  return r.length > 0;
+}
 
 /* ---------- activity (registro técnico, append-only) ---------- */
 export const insertActivity = (q, row) => insertRow(q, 'activity_events', row);

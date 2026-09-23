@@ -1,4 +1,4 @@
-import { getStudent, getRoute, findTrip, ensureTrip, upsertBoarding, insertOptOut, patchRow, getStaff, getPerson, listRequests, listStaff, listLevels } from '../db/repo.js';
+import { getRoute, findTrip, ensureTrip, upsertBoarding, insertOptOut, patchRow, getStaff, listRequests, listLevels } from '../db/repo.js';
 import { minutesOf, nowHHMM, todayISO } from './time.js';
 import { fmtTime, fmtClock, firstName, LEG_NAMES, roleName } from './text.js';
 import { notifyPerson, notifyRole, notifyStaff, logEvent } from './notifications.js';
@@ -34,14 +34,14 @@ export async function busStatusFor(ctx, st) {
   return { r, active: true, leg: cur.leg, trip, rec: trip.boarded[st.id], noBus: trip.noBus.includes(st.id), stop: r.stops.find((s) => s.id === st.stopId), pos: busPosition(r, cur.leg, cur.progress), progress: cur.progress, simulated: cur.simulated };
 }
 export async function whereIs(ctx, studentId) {
-  const st = await getStudent(ctx.q, studentId);
+  const st = await ctx.getStudent(studentId);
   if (!st) notFound('student_not_found');
   const today = todayISO(ctx.now, ctx.tz);
   const todays = await listRequests(ctx.q, { studentIds: [studentId], date: today, kind: 'salida' });
   const exit = todays.find((x) => x.status === 'retirado');
   if (exit) {
     const off = await getStaff(ctx.q, exit.exitBy);
-    const pk = await getPerson(ctx.q, exit.pickupBy);
+    const pk = await ctx.getPerson(exit.pickupBy);
     return { text: '🚪 ' + firstName(st.name) + ' salió por ' + exit.pickupPoint + ' a las ' + fmtClock(ctx, exit.exitAt) + ', retirado(a) por ' + describePickup(exit, pk) + '. Confirmó ' + off.name + ' (' + (off.title || roleName(off.role)) + ').' };
   }
   const appr = todays.find((x) => x.status === 'aprobada');
@@ -66,7 +66,7 @@ export async function whereIs(ctx, studentId) {
   }
   const now = minutesOf(nowHHMM(ctx.now, ctx.tz));
   if (now >= minutesOf(ctx.settings.schoolStart) && now <= minutesOf(ctx.settings.schoolEnd)) {
-    const tch = (await listStaff(ctx.q)).find((s) => s.role === 'profesor' && (s.grades || []).includes(st.grade));
+    const tch = (await ctx.staffList()).find((s) => s.role === 'profesor' && (s.grades || []).includes(st.grade));
     const lv = (await listLevels(ctx.q)).find((l) => l.id === st.levelId);
     return { text: '🏫 ' + firstName(st.name) + ' está en el plantel · ' + st.grade + ' ' + (lv ? lv.name : st.levelId) + (tch ? ' · ' + tch.name : '') + '.' + apprTxt };
   }
@@ -75,7 +75,7 @@ export async function whereIs(ctx, studentId) {
 export async function markBoarding(ctx, routeId, leg, studentId, status, byStaffId, stopId) {
   if (!LEG_NAMES[leg]) badRequest('invalid_leg');
   if (!['abordo', 'bajo', 'no_abordo'].includes(status)) badRequest('invalid_status');
-  const st = await getStudent(ctx.q, studentId); const r = await getRoute(ctx.q, routeId);
+  const st = await ctx.getStudent(studentId); const r = await getRoute(ctx.q, routeId);
   if (!st || !r) notFound('student_or_route_not_found');
   if (st.routeId !== r.id) conflict('student_not_on_route');
   const trip = await ensureTrip(ctx.q, todayISO(ctx.now, ctx.tz), r.id, leg);
@@ -99,13 +99,13 @@ export async function setTripStatus(ctx, routeId, leg, status, byStaffId) {
   return findTrip(ctx.q, trip.date, r.id, leg);
 }
 export async function markNoBus(ctx, studentId, personId, legs) {
-  const st = await getStudent(ctx.q, studentId);
+  const st = await ctx.getStudent(studentId);
   if (!st) notFound('student_not_found');
   const r = st.routeId ? await getRoute(ctx.q, st.routeId) : null;
   if (!r) conflict('no_bus_route');
   const today = todayISO(ctx.now, ctx.tz);
   for (const leg of legs) { const trip = await ensureTrip(ctx.q, today, r.id, leg); await insertOptOut(ctx.q, trip.id, studentId, personId, ctx.now); }
-  const by = await getPerson(ctx.q, personId);
+  const by = await ctx.getPerson(personId);
   await logEvent(ctx, 'Avisó que ' + st.name + ' hoy no va en el ' + r.name + ' (' + legs.join(', ') + ')', by.name);
   await notifyStaff(ctx, r.monitorId, '🚌 ' + st.name + ' hoy no va en el bus (' + legs.join(', ') + ') · avisó ' + by.name);
   for (const t of st.titulares.filter((x) => x !== personId)) await notifyPerson(ctx, t, 'ℹ️ ' + by.name + ' avisó que ' + firstName(st.name) + ' hoy no va en el ' + r.name + ' (' + legs.join(', ') + ').');
