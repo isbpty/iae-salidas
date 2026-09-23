@@ -183,7 +183,8 @@ export function createApp(deps) {
     } catch (e) {
       const status = e.status || (e instanceof SyntaxError ? 400 : 500);
       act.error = status === 500 ? 'internal_error' : e.code || e.message;
-      if (status === 500) { console.error(e); return json(res, 500, { error: 'internal_error', message: null }); }
+      /* In demo mode the message travels with the 500 so a pilot problem can be diagnosed without the platform logs. */
+      if (status === 500) { console.error(e); return json(res, 500, { error: 'internal_error', message: config.demoMode ? String(e.message || e).slice(0, 300) : null }); }
       return json(res, status, { error: e.code || e.message, message: e.detail || null, ...(e.extra || {}) });
     } finally {
       if (isApi) { if (!act.error && res.statusCode >= 400) act.error = res.errorCode || null; await recordRequest(req, path, act, startedAt, startedMs, res); }
