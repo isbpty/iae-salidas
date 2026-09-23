@@ -112,6 +112,13 @@ test('auto-approval rule returns the prototype reasons', async () => {
   assert.equal((await evaluateAutoApprove(ctx, { ...base, pickupBy: 'p7' }, st)).reason, 'la persona que retira no está autorizada');
   assert.equal((await evaluateAutoApprove(ctx, { ...base, pickupBy: 'p5' }, st)).reason, 'autorización de una sola vez requiere revisión');
   assert.equal((await evaluateAutoApprove({ ...ctx, settings: { ...ctx.settings, autoApprove: false } }, base, st)).reason, 'auto-aprobación desactivada');
+  // A duplicate salida for the same student and date forces manual review too, even when it would
+  // otherwise sail through (L15 fix-up): it is never rejected outright, only kept off auto-approval.
+  // (Checked before the "recent rejection" insert below, since that rule would otherwise win first.)
+  await t.db.query("INSERT INTO requests(id, kind, student_id, requested_by, pickup_by, date, time, channel, status, created_at) VALUES ('rdup','salida','e1','p2','p2','2026-09-18','09:00','web','pendiente', $1)", [new Date('2026-09-18T14:00:00Z').toISOString()]);
+  assert.equal((await evaluateAutoApprove(ctx, base, st)).reason, 'ya existe otra salida hoy para este estudiante (9:00 am, retira Ana Pérez): revisar');
+  await t.db.query("DELETE FROM requests WHERE id='rdup'");
+
   await t.db.query("INSERT INTO requests(id, kind, student_id, requested_by, date, channel, status, created_at) VALUES ('rx','salida','e1','p1','2026-09-10','web','rechazada', $1)", [new Date('2026-09-10T15:00:00Z').toISOString()]);
   assert.equal((await evaluateAutoApprove(ctx, base, st)).reason, 'el estudiante tiene un rechazo reciente');
   await t.close();

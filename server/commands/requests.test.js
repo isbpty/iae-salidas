@@ -196,19 +196,34 @@ test('approveRequest rejects a salida whose date is already in the past', async 
   await t.close();
 });
 
-test('a second active salida for the same student and date is rejected as a duplicate (L15)', async () => {
+test('a second active salida for the same student and date is never auto-approved, only forced into manual review (L15)', async () => {
   const t = await makeTestApp();
   const { result: r } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '13:00', pickupBy: 'p1', reason: 'x' });
   assert.equal(r.status, 'aprobada');
-  await assert.rejects(t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '14:00', pickupBy: 'p2', reason: 'y' }), (e) => e.status === 409 && e.code === 'duplicate_salida');
-  // A still-pendiente one blocks a new one too, not just an aprobada one.
-  const { result: r2 } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-19', time: '11:00', pickupBy: 'p5', reason: 'z' });
-  assert.equal(r2.status, 'pendiente', 'una_vez needs manual review');
-  await assert.rejects(t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-19', time: '12:00', pickupBy: 'p1', reason: 'w' }), (e) => e.code === 'duplicate_salida');
-  // Cancelling frees the date up again.
-  await t.run('cancel_request', 'u_p1', { requestId: r.id });
-  const { result: r3 } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '14:00', pickupBy: 'p2', reason: 'y' });
-  assert.equal(r3.status, 'aprobada');
+
+  // A second one is created, not rejected -- it would otherwise auto-approve (titular, plenty of
+  // notice), but the existing r forces it to manual review instead. The demo script depends on this:
+  // rejecting outright breaks the simulator's second salida for Joseph.
+  const { result: r2 } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '14:00', pickupBy: 'p2', reason: 'y' });
+  assert.equal(r2.status, 'pendiente', 'would have auto-approved, but a duplicate forces manual review');
+  assert.match(r2.history.at(-1).text, /Pendiente de revisión: ya existe otra salida hoy para este estudiante \(1:00 pm, retira Carlos Rodríguez\): revisar/);
+  // Recepción can still approve it manually.
+  const { result: approved } = await t.run('approve_request', 'u_s2', { requestId: r2.id });
+  assert.equal(approved.status, 'aprobada');
+
+  // A still-pendiente one (not just an aprobada one) blocks auto-approval of a new one too.
+  const { result: r3 } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-19', time: '11:00', pickupBy: 'p5', reason: 'z' });
+  assert.equal(r3.status, 'pendiente', 'una_vez needs manual review anyway');
+  const { result: r4 } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-19', time: '12:00', pickupBy: 'p1', reason: 'w' });
+  assert.equal(r4.status, 'pendiente', 'blocked from auto-approval by the still-pendiente r3');
+  assert.match(r4.history.at(-1).text, /Pendiente de revisión: ya existe otra salida hoy para este estudiante \(11:00 am, retira Laura Gómez\): revisar/);
+
+  // Cancelling the others frees the date up again: auto-approval resumes.
+  await t.run('cancel_request', 'u_p1', { requestId: r3.id });
+  await t.run('cancel_request', 'u_p1', { requestId: r4.id });
+  const { result: r5 } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-19', time: '13:00', pickupBy: 'p1', reason: 'v' });
+  assert.equal(r5.status, 'aprobada', 'no active salida left that day, so this one auto-approves');
+
   // A different student, or a different date, is never a duplicate.
   await t.run('create_salida', 'u_p1', { studentId: 'e2', date: '2026-09-18', time: '14:30', pickupBy: 'p1', reason: 'z2' });
   await t.close();

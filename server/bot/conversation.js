@@ -20,7 +20,6 @@ const CREATE_REQUEST_ERRORS = {
   invalid_date: 'No reconocí esa fecha. Intenta de nuevo, por ejemplo "mañana" o "25/09".',
   invalid_time: 'No reconocí esa hora. Intenta de nuevo, por ejemplo "3:30 pm".',
   pickup_not_candidate: 'Esa persona ya no aparece como autorizada para retirar. Regístrala en la app o elige a alguien más.',
-  duplicate_salida: 'Ya hay una salida en trámite para ese estudiante ese día. Escribe "estado" para verla, o pide en recepción que la cancelen antes de crear otra.',
 };
 
 const reply = (ctx, key, text, buttons = null, extra = {}) => ctx.transport.send(ctx, key, { text, buttons, location: extra.location || null, typing: true });
@@ -256,7 +255,7 @@ async function handleConfirmDraft(ctx, key, p, kids, st, n) {
     try {
       await createRequest(ctx, { ...data, attachmentName: attachment || null });
     } catch (e) {
-      if (e instanceof HttpError && (e.status === 400 || e.code === 'duplicate_salida')) {
+      if (e instanceof HttpError && e.status === 400) {
         return reply(ctx, key, '⚠️ ' + (CREATE_REQUEST_ERRORS[e.code] || 'No pude crear la solicitud, intenta de nuevo.') + '\n\n' + botMenu(ctx, p, kids));
       }
       throw e;

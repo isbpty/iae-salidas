@@ -126,8 +126,8 @@ export async function createRequest(ctx, data) {
     req.pickupBy = data.pickupBy || by.id;
     const candidate = (await pickupCandidates(ctx, st.id, req.date)).find((c) => c.person.id === req.pickupBy);
     if (!candidate) badRequest('pickup_not_candidate');
-    const dup = (await listRequests(ctx.q, { studentIds: [st.id], date: req.date, kind: 'salida' })).find((r) => ['pendiente', 'aprobada'].includes(r.status));
-    if (dup) conflict('duplicate_salida');
+    // A second active salida for the same student and date is not rejected (that broke the demo
+    // script): it is simply never auto-approved -- see the dup check in evaluateAutoApprove.
     req.code = await uniqueCode(ctx, req.date);
     req.pickupKind = candidate.kind;
   } else if (req.kind === 'excusa') {

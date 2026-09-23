@@ -1,6 +1,7 @@
-import { listRequests } from '../db/repo.js';
+import { listRequests, getPerson } from '../db/repo.js';
 import { localToMs } from './time.js';
 import { pickupEligibility } from './eligibility.js';
+import { fmtTime } from './text.js';
 
 export async function evaluateAutoApprove(ctx, req, st) {
   const cfg = ctx.settings;
@@ -14,5 +15,14 @@ export async function evaluateAutoApprove(ctx, req, st) {
   const cutoff = ctx.now.getTime() - 30 * 24 * 3600 * 1000;
   const rejected = (await listRequests(ctx.q, { studentIds: [req.studentId], status: 'rechazada' })).some((r) => r.createdAt > cutoff);
   if (rejected) return { ok: false, reason: 'el estudiante tiene un rechazo reciente' };
+  /* Never silently duplicate: a second active salida for the same student and date always needs a
+     human to look at it, even if it would otherwise sail through auto-approval (L15 fix-up -- the
+     simulator's second demo salida for Joseph, at short notice with the grandmother, must still
+     reach the "Aprobar" button in Recepción's queue instead of being rejected outright). */
+  const dup = (await listRequests(ctx.q, { studentIds: [req.studentId], date: req.date, kind: 'salida' })).find((r) => r.id !== req.id && ['pendiente', 'aprobada'].includes(r.status));
+  if (dup) {
+    const otherPk = await getPerson(ctx.q, dup.pickupBy);
+    return { ok: false, reason: 'ya existe otra salida hoy para este estudiante (' + fmtTime(dup.time) + ', retira ' + (otherPk ? otherPk.name : '?') + '): revisar' };
+  }
   return { ok: true };
 }
