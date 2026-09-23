@@ -15,7 +15,8 @@ export const CONFIG = { secret: 's'.repeat(32), pin: '4321', sharedPin: true, su
 /* Friday 2026-09-18 10:30 in Panama: school hours, bus not on the road unless simulateBus. */
 export const NOW = new Date('2026-09-18T15:30:00Z');
 
-export async function makeTestApp({ now = NOW, config = {} } = {}) {
+/* `push`: a MemoryPush (transports/push.js) to see the notices; none by default (push off). */
+export async function makeTestApp({ now = NOW, config = {}, push = null } = {}) {
   const db = await openDb({});
   await migrate(db);
   await db.tx((q) => seedDemo(q, { now, tz: TZ }));
@@ -23,7 +24,7 @@ export async function makeTestApp({ now = NOW, config = {} } = {}) {
      Tests may set `clock.now` directly to jump in time. */
   const clock = { now };
   const tick = () => { clock.now = new Date(clock.now.getTime() + 1000); return clock.now; };
-  const deps = { db, config: { ...CONFIG, ...config }, transport: new SimulatorTransport(), gps: new SimulatedGps(), now: tick };
+  const deps = { db, config: { ...CONFIG, ...config }, transport: new SimulatorTransport(), gps: new SimulatedGps(), push, now: tick };
   const app = createApp(deps);
   return {
     db, deps, app, clock,

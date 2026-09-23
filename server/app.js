@@ -12,9 +12,10 @@ import { classify, maskInput, recordServerEvent, ingestClientEvents } from './ac
 import { runCommand } from './commands/run.js';
 import { buildView } from './projections/index.js';
 import { canSeeAttachment } from './projections/access.js';
+import { pushEnabled, cleanSubscription, saveSubscription, removeSubscription, subscriptionCounts, sendTestNotice, alertTesterLogin } from './push.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon' };
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.webmanifest': 'application/manifest+json; charset=utf-8' };
 
 export function createApp(deps) {
   const { db, config } = deps;
@@ -137,7 +138,12 @@ export function createApp(deps) {
       if (token && !(await consumeTokenId(db, token.jti, now))) { await recordLoginFailure(db, [ipKey, userKey], now); return json(res, 401, { error: 'invalid_credentials' }); }
       await clearLoginFailures(db, [userKey]);
       act.user = user; act.session = { testerId: proof.testerId || null, super: !!proof.super };
-      return startSession(res, user, proof, act);
+      const sid = randomBytes(8).toString('hex');
+      /* A tester came in (not the shared PIN, not the super admin themselves): notice to the /super devices, 3 s at most. */
+      if (proof.testerId && !proof.super) {
+        await alertTesterLogin(deps, { tester: { id: proof.testerId, name: proof.testerName }, user, sid, ip: clientIp(req), ua: userAgent(req), now });
+      }
+      return startSession(res, user, proof, act, sid);
     }
     /* Logout closes every session of that tester, on every device (tokens are not stored one by one). */
     if (path === 'auth/logout' && req.method === 'POST') {
@@ -177,6 +183,12 @@ export function createApp(deps) {
         if (path === 'activity/summary') return json(res, 200, await summary(db, f, deps.now()));
         if (path === 'activity/events') return json(res, 200, await activityEvents(db, f));
         if (path === 'activity/testers') return json(res, 200, await listTesters(db));
+        /* Avisos en el celular: la clave pública viaja al navegador; sin claves VAPID la función está apagada. */
+        if (path === 'super/push/config') {
+          if (!pushEnabled(deps)) return json(res, 200, { enabled: false });
+          const c = await subscriptionCounts(db, sup.testerId);
+          return json(res, 200, { enabled: true, publicKey: config.vapidPublicKey, subscribed: c.mine > 0, devices: c.devices });
+        }
         if (path === 'activity/export.csv') {
           const csv = await exportCsv(db, f);
           res.writeHead(200, { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': 'attachment; filename="actividad.csv"', 'cache-control': 'no-store' });
@@ -186,6 +198,22 @@ export function createApp(deps) {
       if (req.method === 'POST') {
         const input = await readBody(req);
         const now = deps.now();
+        if (path.startsWith('super/push/')) {
+          if (!pushEnabled(deps)) return json(res, 409, { error: 'push_not_configured' });
+          if (path === 'super/push/subscribe') {
+            const subscription = cleanSubscription(input.subscription);
+            if (!subscription) return json(res, 400, { error: 'invalid_subscription' });
+            await saveSubscription(db, { testerId: sup.testerId, subscription, ua: userAgent(req), now });
+            return json(res, 200, { ok: true, devices: (await subscriptionCounts(db, sup.testerId)).devices });
+          }
+          if (path === 'super/push/unsubscribe') return json(res, 200, { removed: await removeSubscription(db, input.endpoint) });
+          if (path === 'super/push/test') {
+            const endpoint = input.endpoint ? String(input.endpoint) : null;
+            const r = await sendTestNotice(deps, { sup, endpoint, now, ip: clientIp(req), ua: userAgent(req) });
+            return json(res, 200, { sent: r.sent, removed: r.removed, failed: r.failed, ...(r.error ? { error: r.error } : {}) });
+          }
+          return json(res, 404, { error: 'not_found' });
+        }
         const audit = (summary) => insertAudit(db, { at: now, actorUserId: null, actorRole: 'super', actorName: 'Super admin (' + sup.testerName + ')', command: path, channel: 'super', summary });
         if (path === 'super/regenerate') {
           const t = await regenerateTesterPin(db, String(input.testerId || ''), config.secret);
@@ -298,14 +326,17 @@ export function createApp(deps) {
     let file = null;
     if (pathname === '/' || pathname === '/index.html') file = join(ROOT, 'public', 'index.html');
     else if (pathname === '/super' || pathname === '/super.html') file = join(ROOT, 'public', 'super.html');
+    /* The installable /super: manifest and service worker from the site root (vercel.json sets the same headers). */
+    else if (pathname === '/super-manifest.webmanifest' || pathname === '/super-sw.js') file = join(ROOT, 'public', pathname.slice(1));
     else {
-      const m = /^\/client\/([A-Za-z0-9_][A-Za-z0-9_.-]*)$/.exec(pathname);
-      if (m) file = join(ROOT, 'public', 'client', m[1]);
+      const m = /^\/(client|icons)\/([A-Za-z0-9_][A-Za-z0-9_.-]*)$/.exec(pathname);
+      if (m) file = join(ROOT, 'public', m[1], m[2]);
     }
     if (!file) return json(res, 404, { error: 'not_found' });
     try {
       const data = await readFile(file);
-      res.writeHead(200, { 'content-type': MIME[extname(file)] || 'application/octet-stream', 'cache-control': 'no-cache' });
+      const extra = pathname === '/super-sw.js' ? { 'service-worker-allowed': '/' } : {};
+      res.writeHead(200, { 'content-type': MIME[extname(file)] || 'application/octet-stream', 'cache-control': 'no-cache', ...extra });
       res.end(data);
     } catch { json(res, 404, { error: 'not_found' }); }
   }

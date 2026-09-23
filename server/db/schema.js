@@ -114,4 +114,14 @@ ALTER TABLE testers ADD COLUMN IF NOT EXISTS pin_lookup text;
 CREATE UNIQUE INDEX IF NOT EXISTS testers_pin_lookup ON testers(pin_lookup);
 `,
   },
+  {
+    /* Devices (the installed /super page) that get a push notice when a tester logs in. `keys` is the
+       browser's { p256dh, auth }; a 404/410 from the push service deletes the row (see server/push.js). */
+    version: '009_push_subscriptions',
+    sql: `
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id bigserial PRIMARY KEY, tester_id text NOT NULL, endpoint text NOT NULL UNIQUE, keys jsonb NOT NULL, ua text,
+  created_at timestamptz NOT NULL, last_ok_at timestamptz, failures integer NOT NULL DEFAULT 0);
+`,
+  },
 ];

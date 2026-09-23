@@ -1,9 +1,11 @@
 /* Página /super: panel del super admin, fuera de la app. Acceso propio con PIN de super admin + clave
    (SUPER_KEY), cookie aparte de una hora. Lee GET /api/activity/* y gestiona probadores por /api/super/*. */
 const SUP = { tester: null, users: [], range: 'today', from: '', to: '', testerId: '', userId: '', role: '', errorsOnly: false, q: '', sid: '', kind: '',
-  summary: null, events: [], nextBefore: null, loading: false, seq: 0, error: null, timer: null, newPin: null, showTesters: false, testers: null };
-const ACT_KINDS = ['', 'simulator', 'command', 'view', 'login', 'login_failed', 'switch_user', 'logout', 'attachment', 'super_login', 'super_action', 'screen_enter', 'screen_leave', 'modal_open', 'modal_close', 'click', 'form_submit', 'form_abandon', 'js_error', 'promise_rejection', 'visibility', 'session_start', 'session_end'];
-const KIND_ICON = { command: '⚡', view: '👁', login: '🔑', login_failed: '⛔', switch_user: '🔁', logout: '🚪', attachment: '🖼', screen_enter: '➡️', screen_leave: '⬅️', modal_open: '🗔', modal_close: '🗙', click: '🖱', form_submit: '✅', form_abandon: '🚫', js_error: '💥', promise_rejection: '💥', visibility: '👀', session_start: '▶', session_end: '⏹', pin: '🔢', super_login: '🛡️', super_logout: '🛡️', super_action: '🛠', simulator: '🎬', other: '·' };
+  summary: null, events: [], nextBefore: null, loading: false, seq: 0, error: null, timer: null, newPin: null, showTesters: false, testers: null,
+  /* Avisos en el celular: server = GET /api/super/push/config; sub = la suscripción de este navegador. */
+  push: { server: null, sub: null, busy: false, error: '' } };
+const ACT_KINDS = ['', 'simulator', 'push', 'command', 'view', 'login', 'login_failed', 'switch_user', 'logout', 'attachment', 'super_login', 'super_action', 'screen_enter', 'screen_leave', 'modal_open', 'modal_close', 'click', 'form_submit', 'form_abandon', 'js_error', 'promise_rejection', 'visibility', 'session_start', 'session_end'];
+const KIND_ICON = { command: '⚡', view: '👁', login: '🔑', login_failed: '⛔', switch_user: '🔁', logout: '🚪', attachment: '🖼', screen_enter: '➡️', screen_leave: '⬅️', modal_open: '🗔', modal_close: '🗙', click: '🖱', form_submit: '✅', form_abandon: '🚫', js_error: '💥', promise_rejection: '💥', visibility: '👀', session_start: '▶', session_end: '⏹', pin: '🔢', super_login: '🛡️', super_logout: '🛡️', super_action: '🛠', simulator: '🎬', push: '🔔', other: '·' };
 
 /* ---------- red ---------- */
 async function req(path, opts = {}) {
@@ -96,6 +98,7 @@ function panel() {
     sel('tester', SUP.testerId, testerOpts, 'Todos los probadores') + sel('user', SUP.userId, userOpts, 'Todos los usuarios') + sel('role', SUP.role, roleOpts, 'Todos los roles') +
     '<label class="check small"><input type="checkbox" data-change="errors"' + (SUP.errorsOnly ? ' checked' : '') + '> Solo errores</label></div>';
   if (SUP.error) h += '<div class="empty danger-text">No se pudo cargar la actividad: ' + esc(SUP.error) + '</div>';
+  h += pushBlock();
   if (SUP.showTesters) h += testersBlock();
   if (!s) return h + (SUP.loading ? '<div class="empty">Cargando…</div>' : '');
   const errs = s.errors.reduce((a, e) => a + e.count, 0);
@@ -165,6 +168,106 @@ function testersBlock() {
   return h + '<div class="actions"><button class="btn small danger" data-action="purge">🧹 Borrar actividad de más de 30 días</button></div></div>';
 }
 
+/* ---------- avisos en el celular (web push) ---------- */
+const SW_URL = '/super-sw.js', SW_SCOPE = '/super';
+const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isStandalone = () => window.navigator.standalone === true || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+function urlBase64ToUint8Array(base64) {
+  const padded = (base64 + '='.repeat((4 - (base64.length % 4)) % 4)).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(padded);
+  return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+}
+/* A subscription made with other VAPID keys (keys changed in Vercel) is useless: compare before reusing it. */
+const sameKey = (buf, publicKey) => {
+  if (!buf) return true;
+  const a = new Uint8Array(buf), b = urlBase64ToUint8Array(publicKey);
+  return a.length === b.length && a.every((x, i) => x === b[i]);
+};
+async function swRegistration() {
+  await navigator.serviceWorker.register(SW_URL, { scope: SW_SCOPE });
+  return navigator.serviceWorker.ready;
+}
+/* Estado al abrir /super: configuración del servidor y, si este navegador ya estaba suscrito, se la recuerda
+   al servidor (por si la base se reinició). */
+async function loadPush() {
+  const P = SUP.push;
+  try { P.server = await req('/api/super/push/config'); } catch (e) { P.server = null; return; }
+  if (!P.server.enabled || !pushSupported()) return;
+  try {
+    const reg = await navigator.serviceWorker.getRegistration(SW_SCOPE);
+    P.sub = reg ? await reg.pushManager.getSubscription() : null;
+    if (P.sub && sameKey(P.sub.options && P.sub.options.applicationServerKey, P.server.publicKey)) await postJ('/api/super/push/subscribe', { subscription: P.sub.toJSON() });
+    else P.sub = null;
+  } catch (e) { P.sub = null; }
+}
+function pushState() {
+  const P = SUP.push;
+  if (!P.server) return { label: 'comprobando…', cls: 'muted' };
+  if (!P.server.enabled) return { label: 'no configurado', cls: 'muted' };
+  if (!pushSupported()) return { label: 'no soportado en este navegador', cls: 'danger-text' };
+  if (Notification.permission === 'denied') return { label: 'bloqueado en este navegador', cls: 'danger-text' };
+  return P.sub ? { label: 'activado en este dispositivo', cls: 'ok-text' } : { label: 'desactivado en este dispositivo', cls: 'muted' };
+}
+function pushBlock() {
+  const P = SUP.push, st = pushState();
+  let h = '<div class="card"><h3>🔔 Avisos en el celular <span class="small ' + st.cls + '">· ' + esc(st.label) + '</span></h3>';
+  if (P.server && !P.server.enabled) {
+    return h + '<p class="small muted">Los avisos push están apagados en el servidor. Genera las claves con <span class="mono">npx web-push generate-vapid-keys</span> y ponlas en Vercel como <span class="mono">VAPID_PUBLIC_KEY</span>, <span class="mono">VAPID_PRIVATE_KEY</span> y <span class="mono">VAPID_SUBJECT</span> (mailto:tu-correo); luego vuelve a desplegar.</p></div>';
+  }
+  h += '<p class="small muted">Te llega un aviso cuando un probador entra a la app (uno cada 10 min por probador). Tocarlo abre este panel filtrado por ese probador.' +
+    (P.server && P.server.devices ? ' Dispositivos con avisos: <b>' + P.server.devices + '</b>.' : '') + '</p>';
+  if (isIOS() && !isStandalone()) h += '<p class="small"><b>En iPhone:</b> Compartir → Añadir a pantalla de inicio, abre la app desde ahí y activa los avisos (hace falta iOS 16.4 o más reciente).</p>';
+  else if (!pushSupported()) h += '<p class="small danger-text">Este navegador no admite avisos push. Usa Chrome en Android o la app instalada en iPhone.</p>';
+  if (P.error) h += '<p class="small danger-text">' + esc(P.error) + '</p>';
+  if (P.server && pushSupported()) {
+    const dis = P.busy ? ' disabled' : '';
+    h += '<div class="actions">' + (P.sub
+      ? '<button class="btn small" data-action="pushTest"' + dis + '>Probar</button> <button class="btn small danger" data-action="pushOff"' + dis + '>Desactivar</button>'
+      : '<button class="btn small primary" data-action="pushOn"' + dis + '>Activar avisos en este dispositivo</button>' + (P.server.devices ? ' <button class="btn small" data-action="pushTest"' + dis + '>Probar</button>' : '')) + '</div>';
+  }
+  return h + '</div>';
+}
+async function pushTask(fn) {
+  const P = SUP.push;
+  P.busy = true; P.error = ''; render();
+  try { await fn(); } catch (e) { P.error = e.message || String(e); } finally { P.busy = false; render(); }
+}
+const PUSH_ACTIONS = {
+  pushOn() {
+    /* El permiso se pide primero, dentro del toque (Safari lo exige). */
+    const asking = Notification.requestPermission();
+    pushTask(async () => {
+      const perm = await asking;
+      if (perm !== 'granted') throw new Error(perm === 'denied' ? 'Permiso denegado: actívalo en los ajustes del navegador para este sitio.' : 'No se dio permiso para mostrar avisos.');
+      const reg = await swRegistration();
+      let sub = await reg.pushManager.getSubscription();
+      if (sub && !sameKey(sub.options && sub.options.applicationServerKey, SUP.push.server.publicKey)) { await sub.unsubscribe(); sub = null; }
+      if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(SUP.push.server.publicKey) });
+      const r = await postJ('/api/super/push/subscribe', { subscription: sub.toJSON() });
+      SUP.push.sub = sub; SUP.push.server.devices = r.devices; SUP.push.server.subscribed = true;
+      toast('Avisos activados en este dispositivo', 'ok');
+    });
+  },
+  pushTest() {
+    pushTask(async () => {
+      const r = await postJ('/api/super/push/test', SUP.push.sub ? { endpoint: SUP.push.sub.endpoint } : {});
+      if (r.failed) throw new Error('El servicio de avisos respondió con error: ' + (r.error || 'desconocido'));
+      if (r.removed && !r.sent) { SUP.push.sub = null; throw new Error('Este dispositivo ya no acepta avisos: vuelve a activarlos.'); }
+      toast(r.sent ? 'Aviso de prueba enviado (' + r.sent + ')' : 'No hay dispositivos con avisos', r.sent ? 'ok' : 'info');
+    });
+  },
+  pushOff() {
+    pushTask(async () => {
+      const sub = SUP.push.sub;
+      if (sub) { await postJ('/api/super/push/unsubscribe', { endpoint: sub.endpoint }); await sub.unsubscribe().catch(() => {}); }
+      SUP.push.sub = null;
+      SUP.push.server = await req('/api/super/push/config');
+      toast('Avisos desactivados en este dispositivo', 'info');
+    });
+  },
+};
+
 /* ---------- acciones ---------- */
 const ACTIONS = {
   range(el) { SUP.range = el.dataset.range; load(); },
@@ -200,6 +303,7 @@ const ACTIONS = {
     if (!confirm('¿Generar un PIN nuevo para ' + (t ? t.name : el.dataset.id) + '? El PIN actual dejará de funcionar y se cerrarán sus sesiones abiertas.')) return;
     postJ('/api/super/regenerate', { testerId: el.dataset.id }).then((r) => { SUP.newPin = r; render(); }, (e) => toast('No se pudo regenerar: ' + e.message, 'error'));
   },
+  ...PUSH_ACTIONS,
   purge() { if (confirm('¿Borrar los eventos de actividad de más de 30 días?')) postJ('/api/super/purge', { beforeDays: 30 }).then((r) => { toast('Borrados ' + r.deleted + ' eventos', 'ok'); load(); }, (e) => toast('No se pudo borrar: ' + e.message, 'error')); },
 };
 function onChange(el) {
@@ -227,6 +331,10 @@ function showLogin(message) {
 async function start(tester) {
   try { const me = await getJ('me'); SUP.tester = me.tester; SUP.users = me.users; }
   catch (err) { showLogin(tester ? 'No se pudo abrir la sesión.' : ''); return; }
+  /* Un aviso abre /super?tester=<id>: el panel empieza filtrado por ese probador. */
+  const fromNotice = new URLSearchParams(location.search).get('tester');
+  if (fromNotice) SUP.testerId = fromNotice;
+  loadPush().then(() => { if (SUP.tester && !typing()) render(); });
   document.getElementById('superLogout').style.display = '';
   setStatus('conectado · ' + SUP.tester.name);
   render();
@@ -242,5 +350,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   document.addEventListener('change', (e) => { const el = e.target.closest('[data-change]'); if (el && SUP.tester) onChange(el); });
   document.getElementById('superLogout').onclick = async () => { try { await postJ('/api/auth/super/logout'); } finally { SUP.tester = null; SUP.summary = null; showLogin('Sesión cerrada.'); } };
+  /* The installed /super keeps its service worker registered (it only shows push notices, no cache). */
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register(SW_URL, { scope: SW_SCOPE }).catch(() => {});
   start(null);
 });

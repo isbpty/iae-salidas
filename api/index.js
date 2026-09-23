@@ -4,6 +4,7 @@ import { bootstrap } from '../server/db/migrate.js';
 import { createApp } from '../server/app.js';
 import { SimulatorTransport } from '../server/transports/whatsapp.js';
 import { SimulatedGps } from '../server/transports/gps.js';
+import { createPushSender } from '../server/transports/push.js';
 
 let appPromise;
 function getApp() {
@@ -12,7 +13,7 @@ function getApp() {
       const config = loadConfig();
       const db = await openDb(config);
       await bootstrap(db, { now: new Date(), tz: 'America/Panama' });
-      return createApp({ db, config, transport: new SimulatorTransport(), gps: new SimulatedGps(), now: () => new Date() });
+      return createApp({ db, config, transport: new SimulatorTransport(), gps: new SimulatedGps(), push: createPushSender(config), now: () => new Date() });
     })().catch((e) => { appPromise = null; throw e; });
   }
   return appPromise;

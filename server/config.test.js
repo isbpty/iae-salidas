@@ -40,3 +40,17 @@ test('loadConfig: a SUPER_KEY under 24 characters closes /super without crashing
   assert.equal(loadConfig({ ...good, DEMO_MODE: 'false' }).demoMode, false);
   assert.equal(loadConfig({ ...good, DEMO_MODE: 'true' }).demoMode, true);
 });
+
+test('loadConfig: push notices need all three VAPID values; a partial set turns them off with a warning', (t) => {
+  const warn = t.mock.method(console, 'warn', () => {});
+  const off = loadConfig(good);
+  assert.deepEqual([off.vapidPublicKey, off.vapidPrivateKey, off.vapidSubject], ['', '', '']);
+  assert.equal(warn.mock.callCount(), 0, 'no keys at all is a normal setup');
+  const partial = loadConfig({ ...good, VAPID_PUBLIC_KEY: 'pub', VAPID_SUBJECT: 'mailto:a@b.c' });
+  assert.deepEqual([partial.vapidPublicKey, partial.vapidPrivateKey, partial.vapidSubject], ['', '', '']);
+  const badSubject = loadConfig({ ...good, VAPID_PUBLIC_KEY: 'pub', VAPID_PRIVATE_KEY: 'priv', VAPID_SUBJECT: 'isaac@example.com' });
+  assert.equal(badSubject.vapidPublicKey, '', 'the subject must be mailto: or https:');
+  assert.equal(warn.mock.callCount(), 2);
+  const on = loadConfig({ ...good, VAPID_PUBLIC_KEY: 'pub', VAPID_PRIVATE_KEY: 'priv', VAPID_SUBJECT: 'mailto:a@b.c' });
+  assert.deepEqual([on.vapidPublicKey, on.vapidPrivateKey, on.vapidSubject], ['pub', 'priv', 'mailto:a@b.c']);
+});

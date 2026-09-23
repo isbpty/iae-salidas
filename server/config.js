@@ -12,6 +12,12 @@ export function loadConfig(env = process.env) {
     console.warn('SUPER_KEY tiene menos de 24 caracteres: /super queda cerrado hasta que se cambie.');
     superKey = ''; superKeyError = 'super_key_too_short';
   }
+  /* Push notices for /super (VAPID). All three or none: without them the feature is off, nothing else changes. */
+  let vapidPublicKey = env.VAPID_PUBLIC_KEY || '', vapidPrivateKey = env.VAPID_PRIVATE_KEY || '', vapidSubject = env.VAPID_SUBJECT || '';
+  if ((vapidPublicKey || vapidPrivateKey || vapidSubject) && (!vapidPublicKey || !vapidPrivateKey || !/^(mailto:|https:\/\/)/.test(vapidSubject))) {
+    console.warn('Avisos push apagados: hacen falta VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY y VAPID_SUBJECT (mailto:...).');
+    vapidPublicKey = vapidPrivateKey = vapidSubject = '';
+  }
   return {
     secret,
     pin,
@@ -24,6 +30,9 @@ export function loadConfig(env = process.env) {
     /* Demo mode (ON unless DEMO_MODE=false): reset_demo, seed_load and writing on another person's WhatsApp
        chat (the simulator) only exist in demo mode. Turn it off before loading real data. */
     demoMode: env.DEMO_MODE !== 'false',
+    vapidPublicKey,
+    vapidPrivateKey,
+    vapidSubject,
     databaseUrl,
     dataDir: env.PGLITE_DIR || 'data/pglite',
     port: Number(env.PORT || 3000),
