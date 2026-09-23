@@ -325,7 +325,14 @@ function showLogin(message) {
     e.preventDefault();
     const d = Object.fromEntries(new FormData(e.target));
     try { const r = await postJ('/api/auth/super', { pin: d.pin, key: d.key }); start(r.tester); }
-    catch (err) { document.getElementById('superError').textContent = err.status === 429 ? 'Demasiados intentos. Espera 15 minutos.' : err.status === 401 ? 'PIN o clave incorrectos.' : 'Sin conexión.'; }
+    catch (err) {
+      const msg = err.status === 429 ? 'Demasiados intentos. Espera 15 minutos.'
+        : err.status === 401 ? 'PIN o clave incorrectos.'
+        : err.code === 'super_key_too_short' ? 'La clave SUPER_KEY configurada en Vercel es demasiado corta: debe tener al menos 24 caracteres. Cámbiala en Settings → Environment Variables y vuelve a desplegar.'
+        : err.code === 'push_not_configured' ? 'Los avisos push no están configurados.'
+        : 'Sin conexión (' + (err.code || err.status || err.message) + ').';
+      document.getElementById('superError').textContent = msg;
+    }
   };
 }
 async function start(tester) {
