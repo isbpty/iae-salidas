@@ -89,6 +89,9 @@ CREATE INDEX IF NOT EXISTS activity_kind_name_at ON activity_events(kind, name, 
   {
     version: '004_requests_code_unique',
     sql: `
+UPDATE requests r SET code = lpad(((1000 + floor(random() * 8999))::int)::text, 4, '0')
+  WHERE kind='salida' AND code IS NOT NULL
+    AND EXISTS (SELECT 1 FROM requests o WHERE o.kind='salida' AND o.code IS NOT NULL AND o.date = r.date AND o.code = r.code AND o.id < r.id);
 CREATE UNIQUE INDEX IF NOT EXISTS requests_date_code ON requests(date, code) WHERE kind='salida' AND code IS NOT NULL;
 `,
   },

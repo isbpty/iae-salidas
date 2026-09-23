@@ -7,7 +7,7 @@ import { USER_ROLES } from '../domain/constants.js';
    mutuamente (y los de quien esté probando a mano). Un candado en `app_meta` (id='sim_lock', value =
    segundos unix de vencimiento) lo evita entre pestañas y dispositivos: `acquire` falla con 409 y
    `{ until }` mientras el candado no venció; `release` lo limpia al terminar (o al cancelar). Mismo
-   patrón de upsert condicional que `claimAutoPurge` en server/app.js, con consultas directas contra
+   patrón de upsert condicional que `claimAutoPurge` en server/routes/super.js, con consultas directas contra
    `app_meta` -- no hace falta tocar repo.js. Cualquier probador (de cualquier rol, incluidos los padres)
    puede correr el simulador, así que el comando no restringe roles más allá de tener sesión. */
 const LOCK_ID = 'sim_lock';

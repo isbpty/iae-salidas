@@ -42,7 +42,22 @@ async function refresh() {
   } catch (e) { if (e.status === 401) { showLogin(); return false; } setBadge('sin conexión'); return false; }
 }
 /* Errores que el servidor manda en snake_case y merecen una frase propia. */
-const ERROR_TEXTS = { demo_only: 'Función solo del modo demo', too_many_attempts: 'Demasiados intentos. Espera 15 minutos.', simulator_busy: 'Otro probador está corriendo el simulador ahora mismo. Espera un momento e inténtalo de nuevo.' };
+const ERROR_TEXTS = {
+  demo_only: 'Función solo del modo demo', too_many_attempts: 'Demasiados intentos. Espera 15 minutos.',
+  simulator_busy: 'Otro probador está corriendo el simulador ahora mismo. Espera un momento e inténtalo de nuevo.',
+  date_in_past: 'Esa fecha ya pasó: elige hoy o una fecha futura.', time_in_past: 'Esa hora ya pasó hoy: elige una hora posterior.',
+  invalid_date: 'La fecha no es válida.', invalid_time: 'La hora no es válida.',
+  pickup_not_candidate: 'Esa persona no está autorizada para retirar en esa fecha. Regístrala primero o elige a otra.',
+  pickup_no_longer_eligible: 'La persona que retira ya no está autorizada para esa fecha.', pickup_person_missing: 'La persona que retira ya no existe.',
+  not_today: 'Solo se puede marcar la salida el mismo día.', pickup_denied: 'Un titular negó esta entrega. Pide una nueva confirmación desde garita.',
+  confirmation_not_requested: 'Primero solicita la confirmación desde garita.', confirmation_required: 'Falta la confirmación del titular antes de entregar.',
+  request_not_pending: 'La solicitud ya no está pendiente.', request_not_cancellable: 'Esa solicitud ya no se puede cancelar.',
+  student_already_exited: 'Ese estudiante ya salió hoy; no puede abordar el bus.', student_opted_out: 'Ese estudiante avisó que hoy no va en el bus.',
+  invalid_transition: 'Ese cambio de estado del viaje no es válido.', invalid_stop: 'Esa parada no pertenece a la ruta.',
+  upload_quota: 'Llegaste al máximo de 20 archivos por día.', lookup_required: 'Busca a la persona por cédula o teléfono antes de guardar.',
+  person_not_found: 'No hay ninguna cuenta con esa cédula o teléfono.', user_not_allowed: 'Tu PIN no tiene permiso para entrar con ese usuario.',
+  super_key_too_short: 'La clave de super admin configurada es demasiado corta.', reason_required: 'Escribe el motivo.',
+};
 function errorText(e) { return ERROR_TEXTS[e.code] || 'No se pudo guardar: ' + e.message; }
 /* Ejecuta un comando y adopta la vista que devuelve. Lanza el error para que quien llama no siga. */
 async function apply(name, input) {

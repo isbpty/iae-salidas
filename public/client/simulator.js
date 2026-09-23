@@ -111,7 +111,7 @@ const SIM_SCRIPT = [
   } },
   { title: 'Autorización de una sola vez, con confirmación del titular', run: async () => {
     await S.as('u_p1'); await S.view('whatsapp');
-    await S.chip(/^Hoy retira a Joseph/); await S.settle();
+    await S.chip(/^(Hoy|Mañana) retira a Joseph/); await S.settle();
     await S.chip(/^Sí$/); await S.settle();
     await S.say('Laura Gómez está autorizada solo por hoy: nunca se auto-aprueba.');
     await S.as('u_s2'); await S.view('school', 'inicio');

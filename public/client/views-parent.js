@@ -148,16 +148,19 @@ function chatChips(p, key) {
   if (!kids.length) return ['Hola', 'Estado'];
   const k = kids[0];
   const k2 = kids[1] || kids[0];
-  const t1 = fmtTime(addMinutes(nowHHMM(), 125));
-  const t2 = fmtTime(addMinutes(nowHHMM(), 30));
-  const chips = ['Hola', 'Necesito retirar a ' + firstName(k.name) + ' hoy a las ' + t1];
+  /* De noche los ejemplos pasarían la medianoche y el servidor los rechazaría (time_in_past): se piden para mañana. */
+  const late = minutesOf(nowHHMM()) + 125 >= 24 * 60;
+  const t1 = late ? '8:00 am' : fmtTime(addMinutes(nowHHMM(), 125));
+  const t2 = late ? '9:00 am' : fmtTime(addMinutes(nowHHMM(), 30));
+  const day = late ? 'mañana' : 'hoy';
+  const chips = ['Hola', 'Necesito retirar a ' + firstName(k.name) + ' ' + day + ' a las ' + t1];
   const auths = authsForStudent(k.id).filter((a) => isAuthActive(a));
   if (auths.length) {
     const a = auths[0];
     const ap = person(a.personId) || {};
-    chips.push('A ' + firstName(k.name) + ' lo va a retirar ' + (String(ap.relation || '').toLowerCase() === 'abuela' ? 'la abuela' : ap.name) + ' a las ' + t2);
+    chips.push('A ' + firstName(k.name) + ' lo va a retirar ' + (String(ap.relation || '').toLowerCase() === 'abuela' ? 'la abuela' : ap.name) + (late ? ' mañana' : '') + ' a las ' + t2);
     const uv = auths.find((x) => x.type === 'una_vez');
-    if (uv) chips.push('Hoy retira a ' + firstName(k.name) + ' ' + (person(uv.personId) || {}).name + ' a las ' + t2);
+    if (uv) chips.push((late ? 'Mañana' : 'Hoy') + ' retira a ' + firstName(k.name) + ' ' + (person(uv.personId) || {}).name + ' a las ' + t2);
   }
   chips.push('¿Dónde está ' + firstName(k.name) + '?');
   if (k.routeId) chips.push(firstName(k.name) + ' hoy no va en el bus');

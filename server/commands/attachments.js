@@ -38,7 +38,7 @@ register({
 
 /* S9: adjuntos huérfanos -- subidos pero nunca vinculados a una solicitud (`requests.attachment_id`)
    ni al documento de una persona (`persons.doc_attachment_id`) -- de más de 24 h. Se llama desde la
-   purga existente de /super (server/app.js), no desde un comando nuevo ni un cron aparte. */
+   purga existente de /super (server/routes/super.js), no desde un comando nuevo ni un cron aparte. */
 export async function deleteOrphanAttachments(q, before) {
   const r = await q.query(
     `DELETE FROM attachments a WHERE a.created_at < $1

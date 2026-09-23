@@ -60,6 +60,9 @@ export async function seedLoad(q, { students = 700, seed = 7, now, tz }) {
 
   /* Familias */
   const persons = [], attachments = [], studentsRows = [], guardianships = [], authorizations = [], requests = [], events = [];
+  /* Salida codes are unique per date (index requests_date_code, migration 004): draw again on a repeat. */
+  const usedCodes = new Set();
+  const nextCode = (date) => { let c; do { c = String(1000 + Math.floor(r() * 9000)); } while (usedCodes.has(date + c)); usedCodes.add(date + c); return c; };
   const sizes = planFamilies(r, students);
   const allRouteIds = ['r1', 'r2', ...routes.map((x) => x.id)];
   const stopsByRoute = { r1: ['st1', 'st2', 'st3', 'st4'], r2: ['st5', 'st6', 'st7'] };
@@ -100,13 +103,13 @@ export async function seedLoad(q, { students = 700, seed = 7, now, tz }) {
         requests.push({ id, kind: 'excusa', studentId: st.id, requestedBy: by.id, date: shift(1), excusaType: r() < 0.7 ? 'ausencia' : 'tardanza', reason: pick(r, ['Cita médica', 'Viaje familiar', 'Control con el pediatra', 'Trámite de pasaporte']), channel: 'web', status: 'pendiente', createdAt: new Date(T - 2 * H) });
         events.push({ requestId: id, at: new Date(T - 2 * H), text: 'Excusa enviada por ' + by.name + ' vía App' });
       } else if (kind === 'pendiente') {
-        requests.push({ id, kind: 'salida', studentId: st.id, requestedBy: by.id, pickupBy: by.id, pickupKind: 'titular', date: shift(0), time, reason: pick(r, ['Cita médica', 'Trámite', 'Actividad familiar']), channel: r() < 0.6 ? 'whatsapp' : 'web', status: 'pendiente', code: String(1000 + Math.floor(r() * 9000)), createdAt: new Date(T - 0.4 * H) });
+        requests.push({ id, kind: 'salida', studentId: st.id, requestedBy: by.id, pickupBy: by.id, pickupKind: 'titular', date: shift(0), time, reason: pick(r, ['Cita médica', 'Trámite', 'Actividad familiar']), channel: r() < 0.6 ? 'whatsapp' : 'web', status: 'pendiente', code: nextCode(shift(0)), createdAt: new Date(T - 0.4 * H) });
         events.push({ requestId: id, at: new Date(T - 0.4 * H), text: 'Solicitud creada por ' + by.name + ' vía WhatsApp' });
         events.push({ requestId: id, at: new Date(T - 0.4 * H), text: 'Pendiente de revisión: menos de 60 min de anticipación' });
       } else {
         /* decidedBy stays null for auto-approved rows (autoApproved already records that) -- 'auto'
            is not a staff id and would violate the requests.decided_by → staff(id) FK (migration 012). */
-        requests.push({ id, kind: 'salida', studentId: st.id, requestedBy: by.id, pickupBy: by.id, pickupKind: 'titular', date: shift(-1), time, reason: 'Cita médica', channel: 'whatsapp', status: 'retirado', pickupPoint: 'Puerta Principal', code: String(1000 + Math.floor(r() * 9000)), createdAt: new Date(T - 26 * H), decidedAt: new Date(T - 25.5 * H), decidedBy: null, autoApproved: true, exitAt: new Date(T - 22 * H), exitBy: 's6' });
+        requests.push({ id, kind: 'salida', studentId: st.id, requestedBy: by.id, pickupBy: by.id, pickupKind: 'titular', date: shift(-1), time, reason: 'Cita médica', channel: 'whatsapp', status: 'retirado', pickupPoint: 'Puerta Principal', code: nextCode(shift(-1)), createdAt: new Date(T - 26 * H), decidedAt: new Date(T - 25.5 * H), decidedBy: null, autoApproved: true, exitAt: new Date(T - 22 * H), exitBy: 's6' });
         events.push({ requestId: id, at: new Date(T - 26 * H), text: 'Solicitud creada por ' + by.name + ' vía WhatsApp' });
         events.push({ requestId: id, at: new Date(T - 25.5 * H), text: 'Aprobada automáticamente (regla: titular, anticipación, autorizado vigente) · Puerta Principal' });
         events.push({ requestId: id, at: new Date(T - 22 * H), text: 'Retirado por ' + by.name + ' · marcado en garita por Manuel Ortega' });
