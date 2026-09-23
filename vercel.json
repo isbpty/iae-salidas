@@ -9,8 +9,41 @@
   "headers": [
     { "source": "/(.*)", "headers": [
       { "key": "X-Content-Type-Options", "value": "nosniff" },
-      { "key": "Referrer-Policy", "value": "same-origin" },
+      { "key": "Referrer-Policy", "value": "same-origin" }
+    ] },
+    { "source": "/api/(.*)", "headers": [
       { "key": "Cache-Control", "value": "no-store" }
+    ] },
+    { "source": "/client/(.*)", "headers": [
+      { "key": "Cache-Control", "value": "no-cache" }
+    ] },
+    { "source": "/", "headers": [
+      { "key": "Cache-Control", "value": "no-cache" },
+      { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'" }
+    ] },
+    { "source": "/index.html", "headers": [
+      { "key": "Cache-Control", "value": "no-cache" },
+      { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'" }
+    ] },
+    { "source": "/super", "headers": [
+      { "key": "Cache-Control", "value": "no-cache" },
+      { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'" }
+    ] },
+    { "source": "/super.html", "headers": [
+      { "key": "Cache-Control", "value": "no-cache" },
+      { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'" }
+    ] },
+    { "source": "/super-sw.js", "headers": [
+      { "key": "Content-Type", "value": "text/javascript; charset=utf-8" },
+      { "key": "Service-Worker-Allowed", "value": "/" },
+      { "key": "Cache-Control", "value": "no-cache" }
+    ] },
+    { "source": "/super-manifest.webmanifest", "headers": [
+      { "key": "Content-Type", "value": "application/manifest+json; charset=utf-8" },
+      { "key": "Cache-Control", "value": "no-cache" }
+    ] },
+    { "source": "/icons/(.*)", "headers": [
+      { "key": "Cache-Control", "value": "public, max-age=86400" }
     ] }
   ]
 }

@@ -1,6 +1,6 @@
 /* Estado del cliente: la proyección V que manda el servidor y el estado de interfaz UI. */
 let V = null, ME = null, REV = 0, SKEW = 0;
-const UI = { view: 'parents', split: false, phoneId: 'p1', schoolTab: 'inicio', parentTab: 'inicio', modal: null, filter: 'todas', busy: false };
+const UI = { view: 'parents', split: false, phoneId: 'p1', schoolTab: 'inicio', parentTab: 'inicio', modal: null, filter: 'todas', busy: false, q: '' };
 const FORM_MODALS = ['newSalida', 'newExcusa', 'newAuth', 'reject', 'scan'];
 let markTimer = null, subscribed = false;
 /* Mientras el formulario de login está en pantalla nadie más toca el modal:
@@ -30,25 +30,54 @@ function adopt(payload) {
   V = payload.view; REV = payload.revision; ME = V.user; SKEW = V.serverNow - Date.now();
   if (prev && prev.user.id === ME.id) toastNewNotifications(prev, V);
 }
+/* Devuelve si la vista cambió (200) o no (304/omitida): `api.subscribe` lo usa para el *backoff* del sondeo. */
 async function refresh() {
-  if (loginShowing) return;
+  if (loginShowing) return false;
   try {
-    const r = await api.view('"' + REV + '"');
-    if (r.notModified) return;
+    const r = await api.view('"' + REV + '"', true);
+    if (r.notModified) return false;
     adopt(r); setBadge(connectedText());
     if (!formOpen()) render();
-  } catch (e) { if (e.status === 401) return showLogin(); setBadge('sin conexión'); }
+    return true;
+  } catch (e) { if (e.status === 401) { showLogin(); return false; } setBadge('sin conexión'); return false; }
 }
+/* Errores que el servidor manda en snake_case y merecen una frase propia. */
+const ERROR_TEXTS = {
+  demo_only: 'Función solo del modo demo', too_many_attempts: 'Demasiados intentos. Espera 15 minutos.',
+  simulator_busy: 'Otro probador está corriendo el simulador ahora mismo. Espera un momento e inténtalo de nuevo.',
+  date_in_past: 'Esa fecha ya pasó: elige hoy o una fecha futura.', time_in_past: 'Esa hora ya pasó hoy: elige una hora posterior.',
+  invalid_date: 'La fecha no es válida.', invalid_time: 'La hora no es válida.',
+  pickup_not_candidate: 'Esa persona no está autorizada para retirar en esa fecha. Regístrala primero o elige a otra.',
+  pickup_no_longer_eligible: 'La persona que retira ya no está autorizada para esa fecha.', pickup_person_missing: 'La persona que retira ya no existe.',
+  not_today: 'Solo se puede marcar la salida el mismo día.', pickup_denied: 'Un titular negó esta entrega. Pide una nueva confirmación desde garita.',
+  confirmation_not_requested: 'Primero solicita la confirmación desde garita.', confirmation_required: 'Falta la confirmación del titular antes de entregar.',
+  request_not_pending: 'La solicitud ya no está pendiente.', request_not_cancellable: 'Esa solicitud ya no se puede cancelar.',
+  student_already_exited: 'Ese estudiante ya salió hoy; no puede abordar el bus.', student_opted_out: 'Ese estudiante avisó que hoy no va en el bus.',
+  invalid_transition: 'Ese cambio de estado del viaje no es válido.', invalid_stop: 'Esa parada no pertenece a la ruta.',
+  upload_quota: 'Llegaste al máximo de 20 archivos por día.', lookup_required: 'Busca a la persona por cédula o teléfono antes de guardar.',
+  person_not_found: 'No hay ninguna cuenta con esa cédula o teléfono.', user_not_allowed: 'Tu PIN no tiene permiso para entrar con ese usuario.',
+  super_key_too_short: 'La clave de super admin configurada es demasiado corta.', reason_required: 'Escribe el motivo.',
+};
+function errorText(e) { return ERROR_TEXTS[e.code] || 'No se pudo guardar: ' + e.message; }
 /* Ejecuta un comando y adopta la vista que devuelve. Lanza el error para que quien llama no siga. */
 async function apply(name, input) {
   UI.busy = true; setBadge('guardando…');
-  try { const r = await api.command(name, input); adopt(r); setBadge(connectedText()); return r.result; }
-  catch (e) { if (e.status === 401) showLogin(); else toast('No se pudo guardar: ' + e.message, 'error'); throw e; }
+  try { const r = await api.command(name, input); adopt(r); setBadge(connectedText()); api.resetPoll(); return r.result; }
+  catch (e) { if (e.status === 401) showLogin(); else toast(errorText(e), 'error'); throw e; }
   finally { UI.busy = false; }
 }
+/* L10: marcar "leído" solo tras 5 s con la pestaña visible (y solo si hay algo sin leer), para no
+   apagar los avisos de rol de otro usuario en cuanto alguien abre la app un instante. Si la pestaña
+   se oculta antes de los 5 s, el disparo se salta y no se reprograma aquí: `api.subscribe` refresca
+   y vuelve a pintar en cuanto la pestaña vuelve a estar visible, y ese redibujado llama de nuevo a
+   `markReadSoon`, reiniciando la cuenta. */
 function markReadSoon() {
-  if (!V || !V.unread || markTimer) return;
-  markTimer = setTimeout(() => { markTimer = null; apply('mark_notifications_read', {}).then(() => render()).catch(() => {}); }, 800);
+  if (!V || !V.unread || markTimer || document.hidden) return;
+  markTimer = setTimeout(() => {
+    markTimer = null;
+    if (document.hidden || !V || !V.unread) return;
+    apply('mark_notifications_read', {}).then(() => render()).catch(() => {});
+  }, 5000);
 }
 async function boot() {
   try { const r = await api.view(); adopt(r); afterLogin(); }
@@ -59,16 +88,18 @@ function afterLogin() {
   UI.schoolTab = ME.role === 'garita' ? 'salidas_hoy' : ME.role === 'monitora' ? 'rutas' : 'inicio';
   UI.phoneId = ME.role === 'parent' ? V.me.id : 'p1';
   document.getElementById('splitWrap').style.display = ME.role === 'admin' ? '' : 'none';
-  document.getElementById('resetBtn').style.display = ME.role === 'admin' ? '' : 'none';
+  /* Reiniciar y el simulador solo existen en modo demo (DEMO_MODE=false los apaga en el servidor). */
+  const demo = V.demoMode !== false;
+  document.getElementById('resetBtn').style.display = demo && ME.role === 'admin' ? '' : 'none';
   document.getElementById('logoutBtn').style.display = '';
   document.getElementById('switchBtn').style.display = '';
-  document.getElementById('simBtn').style.display = '';
+  document.getElementById('simBtn').style.display = demo ? '' : 'none';
   setBadge(connectedText());
   T.start();
   render();
   if (!subscribed) { subscribed = true; api.subscribe(refresh, V.realtime); }
 }
-const loginErrorText = (err) => (err.status === 429 ? 'Demasiados intentos. Espera 15 minutos.' : err.status === 401 ? 'PIN incorrecto.' : 'Sin conexión. Intenta de nuevo.');
+const loginErrorText = (err) => (err.status === 429 ? 'Demasiados intentos. Espera 15 minutos.' : err.status === 403 ? 'Tu PIN no tiene acceso a ese usuario.' : err.status === 401 ? 'PIN incorrecto.' : 'Sin conexión. Intenta de nuevo.');
 const userOption = (x) => '<option value="' + esc(x.id) + '">' + esc(x.name) + ' · ' + esc(roleName(x.role)) + '</option>';
 /* Login en dos pasos en la misma tarjeta: primero el PIN (dice quién prueba), luego el usuario del demo. */
 async function showLogin() {
@@ -99,15 +130,15 @@ async function showLogin() {
       e.preventDefault();
       const userId = new FormData(e.target).get('userId');
       try { await api.login(userId, { pinToken: r.pinToken }); modal.className = 'modal hidden'; modal.innerHTML = ''; loginShowing = false; boot(); }
-      catch (err) { document.getElementById('loginError').textContent = err.status === 401 ? 'El PIN caducó. Vuelve a escribirlo.' : loginErrorText(err); }
+      catch (err) { if (err.status === 401) { stepPin(); document.getElementById('loginError').textContent = 'El PIN caducó o ya se usó. Vuelve a escribirlo.'; } else document.getElementById('loginError').textContent = loginErrorText(err); }
     };
   };
   stepPin();
 }
-/* Mismo probador, otro usuario del demo: no hace falta el PIN otra vez. */
+/* Mismo probador, otro usuario del demo: no hace falta el PIN otra vez. Solo los usuarios que su PIN permite. */
 async function showSwitch() {
   let options = [];
-  try { options = await api.options(); } catch { toast('Sin conexión', 'error'); return; }
+  try { options = await api.options(); } catch (e) { if (e.status === 401) showLogin(); else toast('Sin conexión', 'error'); return; }
   const modal = document.getElementById('modal');
   UI.modal = null;
   modal.className = 'modal';
@@ -118,7 +149,7 @@ async function showSwitch() {
     e.preventDefault();
     const userId = new FormData(e.target).get('userId');
     try { T.flush(true); await api.switchUser(userId); location.reload(); }
-    catch (err) { toast('No se pudo cambiar: ' + err.message, 'error'); }
+    catch (err) { toast(err.status === 403 ? 'Tu PIN no tiene acceso a ese usuario.' : 'No se pudo cambiar: ' + err.message, 'error'); }
   };
 }
 async function doLogout() { try { T.stop(); await api.logout(); } finally { location.reload(); } }

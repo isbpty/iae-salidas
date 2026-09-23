@@ -8,6 +8,34 @@ const T = (() => {
   const now = () => Date.now();
   const short = (v) => (v == null ? null : String(v).slice(0, 120));
 
+  /* Huella del dispositivo: solo señales que el navegador ya expone (nada de canvas/audio fingerprinting),
+     resumidas en un hash corto (`fp`) para poder agrupar "el mismo aparato" sin guardar nada que por sí
+     solo identifique a la persona. Cae en un objeto vacío si algo falla (navegador viejo, permisos, etc.):
+     la telemetría nunca debe romper la app. */
+  async function shortHash(obj) {
+    try {
+      const bytes = new TextEncoder().encode(JSON.stringify(obj));
+      const buf = await crypto.subtle.digest('SHA-256', bytes);
+      return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
+    } catch { return null; }
+  }
+  async function fingerprint() {
+    try {
+      const s = window.screen || {}, conn = navigator.connection || {}, uad = navigator.userAgentData;
+      const uaData = uad ? { brands: (uad.brands || []).map((b) => b.brand + ' ' + b.version), mobile: !!uad.mobile, platform: uad.platform || null } : null;
+      const standalone = window.navigator.standalone === true || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+      let tz = null;
+      try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || null; } catch { /* sin Intl */ }
+      const f = {
+        screenWidth: s.width || null, screenHeight: s.height || null, devicePixelRatio: window.devicePixelRatio || null, colorDepth: s.colorDepth || null,
+        languages: navigator.languages ? Array.from(navigator.languages).slice(0, 5) : null, platform: navigator.platform || null,
+        hardwareConcurrency: navigator.hardwareConcurrency || null, deviceMemory: navigator.deviceMemory || null, maxTouchPoints: navigator.maxTouchPoints || null,
+        tz, connection: conn.effectiveType || null, uaData, standalone,
+      };
+      return { ...f, fp: await shortHash(f) };
+    } catch { return {}; }
+  }
+
   function push(ev) {
     if (!enabled) return;
     queue.push({ at: now(), screen: ev.screen === undefined ? screen : ev.screen, ...ev });
@@ -79,7 +107,11 @@ const T = (() => {
   window.addEventListener('pagehide', onPageHide);
 
   return {
-    start() { if (enabled) return; enabled = true; push({ kind: 'session_start', name: 'app', data: { width: window.innerWidth, height: window.innerHeight, lang: navigator.language } }); },
+    async start() {
+      if (enabled) return; enabled = true;
+      const fp = await fingerprint();
+      push({ kind: 'session_start', name: 'app', data: { width: window.innerWidth, height: window.innerHeight, lang: navigator.language, ...fp } });
+    },
     stop() { if (!enabled) return; onPageHide(); enabled = false; screen = null; modal = null; },
     screen: setScreen, modal: setModal, formSubmitted, push, flush,
   };

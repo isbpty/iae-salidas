@@ -14,6 +14,15 @@ test('parseTime understands the prototype formats', () => {
   assert.equal(parseTime(normalize('sin hora')), null);
 });
 
+test('parseTime (L14): "y media"/"y cuarto", mediodía, and a year is never read as the time', () => {
+  assert.equal(parseTime(normalize('a las 3 y media')), '15:30', 'no am/pm, ≤6 means afternoon, same as plain "a las 3"');
+  assert.equal(parseTime(normalize('a las 3 y cuarto')), '15:15');
+  assert.equal(parseTime(normalize('a las 11 y media')), '11:30');
+  assert.equal(parseTime(normalize('al mediodía')), '12:00');
+  assert.equal(parseTime(normalize('mediodía')), '12:00');
+  assert.equal(parseTime(normalize('el 25/09/2026 a las 2 pm')), '14:00', 'the 2026 year is not swallowed as 20:26');
+});
+
 test('parseDate: hoy, mañana, pasado mañana, weekday and dd/mm', () => {
   assert.equal(parseDate(normalize('hoy'), ctx), '2026-09-18');
   assert.equal(parseDate(normalize('mañana'), ctx), '2026-09-19');
@@ -21,6 +30,16 @@ test('parseDate: hoy, mañana, pasado mañana, weekday and dd/mm', () => {
   assert.equal(parseDate(normalize('el lunes'), ctx), '2026-09-21');
   assert.equal(parseDate(normalize('el viernes'), ctx), '2026-09-25', 'same weekday means next week');
   assert.equal(parseDate(normalize('el 3/10'), ctx), '2026-10-03');
+});
+
+test('parseDate (L14): year in dates, dd/mm validated with next-year rollover, and "en/hoy la mañana" is not "mañana" (tomorrow)', () => {
+  assert.equal(parseDate(normalize('el 25/09/2026 a las 2 pm'), ctx), '2026-09-25', 'an explicit year is trusted as-is');
+  assert.equal(parseDate(normalize('el 15/30'), ctx), '2026-09-18', 'month 30 is invalid -- falls back to today instead of "2026-30-15"');
+  assert.equal(parseDate(normalize('el 5/1'), ctx), '2027-01-05', 'Jan 5 2026 already passed -- rolls to next year');
+  assert.equal(parseDate(normalize('hoy en la mañana'), ctx), '2026-09-18', '"en la mañana" is a time of day, not "mañana" (tomorrow)');
+  assert.equal(parseDate(normalize('en la mañana'), ctx), '2026-09-18');
+  assert.equal(parseDate(normalize('a las 8 de la mañana'), ctx), '2026-09-18');
+  assert.equal(parseDate(normalize('mañana en la mañana'), ctx), '2026-09-19', 'the bare "mañana" (tomorrow) is untouched');
 });
 
 test('matchKid by name, by gender word or by being the only child', () => {
@@ -44,4 +63,14 @@ test('extractPickupHint and detectIntent', () => {
   assert.equal(detectIntent(normalize('Emily no irá mañana, tiene cita médica')), 'excusa');
   assert.equal(detectIntent(normalize('cancelar')), 'cancelar');
   assert.equal(detectIntent(normalize('xyz')), 'desconocido');
+});
+
+test('extractPickupHint (L14): "al mediodía" is a time, never read as the name of who picks up', () => {
+  assert.equal(extractPickupHint(normalize('Necesito retirar a Joseph al mediodía')), null);
+});
+
+test('detectIntent (L14): "busca"/"recoge" are salida, and falta/ausencia + permiso is excusa, not salida', () => {
+  assert.equal(detectIntent(normalize('Hoy la busca su tía Marta')), 'salida');
+  assert.equal(detectIntent(normalize('Joseph lo recoge su tío hoy')), 'salida');
+  assert.equal(detectIntent(normalize('Joseph faltará mañana, pido permiso')), 'excusa');
 });

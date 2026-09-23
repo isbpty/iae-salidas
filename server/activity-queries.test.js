@@ -83,6 +83,66 @@ test('summary derives sessions with a 10 minute gap and aggregates hot spots', a
   await t.close();
 });
 
+/* Task 15: IP, geolocalización aproximada y huella del dispositivo. Cada fila es lo que `server/app.js` y
+   `ingestClientEvents` (server/activity.js) ya dejarían en la base: un `login` con `data.geo`, y un
+   `session_start` de cliente con la huella (ua + data + su propia columna `fp`). */
+const CHROME_MAC = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
+const SAFARI_IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1';
+const geoRow = (o) => ({
+  at: new Date(T0 + (o.min || 0) * M), testerId: o.t === undefined ? 't2' : o.t, userId: o.u || 'u_p1', role: o.r || 'parent',
+  sid: o.sid || 'sA', source: o.source || 'server', kind: o.kind || 'command', name: o.name || 'x',
+  screen: null, target: null, durationMs: 100, ok: true, error: null, status: 200, revision: null,
+  ip: o.ip || null, ua: o.ua || null, data: o.data || null, fp: o.fp || null,
+});
+
+test('summary exposes lastIp/lastGeo/lastDevice per probador y por sesión, y una lista de dispositivos distintos', async () => {
+  const t = await makeTestApp();
+  await t.run('create_testers', 'u_s1');
+  const geoPty = { city: 'Ciudad de Panamá', country: 'PA' };
+  const geoDavid = { city: 'David', country: 'PA' };
+  const mac = { platform: 'MacIntel', screenWidth: 1512, screenHeight: 982, fp: 'fpAAA111' };
+  const iphone = { platform: 'iPhone', screenWidth: 390, screenHeight: 844, fp: 'fpBBB222' };
+  await insertRows(t.db, 'activity_events', [
+    geoRow({ min: 0, sid: 'sA', kind: 'login', name: 'auth/login', ip: '203.0.113.1', data: { geo: geoPty } }),
+    geoRow({ min: 0.5, sid: 'sA', source: 'client', kind: 'session_start', name: 'app', ip: '203.0.113.1', ua: CHROME_MAC, data: mac, fp: mac.fp }),
+    geoRow({ min: 20, sid: 'sB', kind: 'login', name: 'auth/login', ip: '198.51.100.2', data: { geo: geoDavid } }),
+    geoRow({ min: 20.5, sid: 'sB', source: 'client', kind: 'session_start', name: 'app', ip: '198.51.100.2', ua: SAFARI_IPHONE, data: iphone, fp: iphone.fp }),
+  ]);
+  const s = await summary(t.db, {}, new Date(T0 + 25 * M));
+  const t2 = s.testers.find((x) => x.id === 't2');
+  assert.equal(t2.lastIp, '198.51.100.2', 'the most recent IP of any kind');
+  assert.deepEqual(t2.lastGeo, geoDavid);
+  assert.equal(t2.lastDevice, 'iPhone · Safari · 390×844', 'the most recent session_start');
+  assert.equal(t2.devices.length, 2, 'two distinct fingerprints');
+  const byFp = Object.fromEntries(t2.devices.map((d) => [d.fp, d]));
+  assert.equal(byFp.fpAAA111.label, 'MacIntel · Chrome · 1512×982');
+  assert.equal(byFp.fpBBB222.label, 'iPhone · Safari · 390×844');
+  assert.equal(byFp.fpAAA111.firstAt, new Date(T0 + 0.5 * M).toISOString());
+  assert.equal(byFp.fpAAA111.lastAt, byFp.fpAAA111.firstAt, 'seen once so far');
+
+  const sA = s.sessions.find((x) => x.sid === 'sA'), sB = s.sessions.find((x) => x.sid === 'sB');
+  assert.equal(sA.lastIp, '203.0.113.1'); assert.deepEqual(sA.lastGeo, geoPty); assert.equal(sA.lastDevice, 'MacIntel · Chrome · 1512×982');
+  assert.equal(sB.lastIp, '198.51.100.2'); assert.deepEqual(sB.lastGeo, geoDavid); assert.equal(sB.lastDevice, 'iPhone · Safari · 390×844');
+
+  /* a tester with no activity at all still gets the fields, just empty/null (never throws) */
+  const idle = s.testers.find((x) => x.id === 't7');
+  assert.equal(idle.lastIp, null); assert.equal(idle.lastGeo, null); assert.equal(idle.lastDevice, null); assert.deepEqual(idle.devices, []);
+
+  /* events() and exportCsv() surface city/country/fp for the login row and the fp for the session_start */
+  const page = await events(t.db, { sid: 'sB' });
+  const loginEv = page.events.find((e) => e.kind === 'login');
+  assert.equal(loginEv.city, 'David'); assert.equal(loginEv.country, 'PA'); assert.equal(loginEv.fp, null);
+  const ssEv = page.events.find((e) => e.kind === 'session_start');
+  assert.equal(ssEv.fp, 'fpBBB222'); assert.equal(ssEv.city, null, 'session_start carries no geo of its own');
+
+  const csv = await exportCsv(t.db, { sid: 'sA' });
+  const [header, ...lines] = csv.trim().split('\r\n');
+  assert.deepEqual(header.split(',').slice(16, 20), ['ip', 'city', 'country', 'fp']);
+  assert.ok(lines.some((l) => l.includes(',Ciudad de Panamá,PA,')));
+  assert.ok(lines.some((l) => l.includes(',,,fpAAA111,')));
+  await t.close();
+});
+
 test('activity routes answer only to the /super cookie', async () => {
   const t = await makeTestApp(); const { base, close } = await t.listen();
   const { result: made } = await t.run('create_testers', 'u_s1');
@@ -102,4 +162,67 @@ test('activity routes answer only to the /super cookie', async () => {
   assert.equal((await call(base, '/api/activity/nope', { cookie: sup })).status, 404);
   assert.equal((await t.db.query("SELECT count(*)::int AS c FROM activity_events WHERE name LIKE 'GET activity%'"))[0].c, 0, 'panel reads are not recorded');
   await close(); await t.close();
+});
+
+/* S7: aunque la lista blanca de activity.js ya evita que un cliente mande `kind: 'command'`, `summary`
+   filtra `source='server'` como segunda barrera -- por ejemplo, para filas ya guardadas antes del arreglo. */
+test('S7: summary no cuenta una fila `source=\'client\'` con kind/ok de servidor como acción ni como error', async () => {
+  const t = await makeTestApp();
+  await t.run('create_testers', 'u_s1');
+  await insertRows(t.db, 'activity_events', [
+    ev({ min: 0, kind: 'command', name: 'approve_request', ok: false, source: 'client' }), // un padre se hace pasar por un error del servidor
+    ev({ min: 1, kind: 'command', name: 'approve_request', ok: true, source: 'server' }),
+    ev({ min: 2, kind: 'command', name: 'approve_request', ok: false, source: 'server' }),
+  ]);
+  const s = await summary(t.db, {}, new Date(T0 + 5 * M));
+  const cs = s.actions.find((a) => a.name === 'approve_request');
+  assert.equal(cs.count, 2, 'la fila con source=client no cuenta como acción');
+  assert.equal(cs.errors, 1);
+  assert.equal(s.errors.find((e) => e.name === 'approve_request').count, 1, 'tampoco cuenta como error del servidor');
+  const t2 = s.testers.find((x) => x.id === 't2');
+  assert.equal(t2.actions, 1, 'solo la fila ok=true de source=server cuenta como acción'); assert.equal(t2.errors, 1);
+  await t.close();
+});
+
+/* S12: where() ya no deja pasar un RangeError (500) con una fecha inválida; responde con un error de dominio. */
+test('S12: summary/events/exportCsv con from/to inválidos lanzan HttpError 400 invalid_range (no 500)', async () => {
+  const t = await makeTestApp();
+  await assert.rejects(summary(t.db, { from: 'no-es-una-fecha' }), (e) => e.status === 400 && e.code === 'invalid_range');
+  await assert.rejects(events(t.db, { to: 'tampoco' }), (e) => e.status === 400 && e.code === 'invalid_range');
+  await assert.rejects(exportCsv(t.db, { from: '2026-13-99T99:99:99Z' }), (e) => e.status === 400 && e.code === 'invalid_range');
+  await t.close();
+});
+
+/* S12: `errorsOnly=false` (string, no boolean) era verdadero para cualquier string no vacío y activaba el
+   filtro; ahora solo 'true'/'1' lo hacen. */
+test('S12: errorsOnly=\'false\' no activa el filtro de errores', async () => {
+  const t = await makeTestApp();
+  await seed(t);
+  const off = await summary(t.db, { errorsOnly: 'false' }, new Date(T0 + 25 * M));
+  const on = await summary(t.db, { errorsOnly: '1' }, new Date(T0 + 25 * M));
+  assert.equal(off.totals.events, 20, 'errorsOnly=false se trata como "sin filtro", igual que omitirlo');
+  assert.equal(on.totals.events, 2);
+  await t.close();
+});
+
+/* S8: una celda que empieza con =, +, -, @, tab o CR se neutraliza con un apóstrofo antes, para que Excel/
+   Sheets no la interprete como fórmula al abrir el CSV exportado. */
+test('S8: exportCsv neutraliza celdas que empiezan con fórmula', async () => {
+  const t = await makeTestApp();
+  await t.run('create_testers', 'u_s1');
+  await insertRows(t.db, 'activity_events', [
+    ev({ min: 0, kind: 'click', name: '=1+1', source: 'client', status: null, ms: null }),
+    ev({ min: 1, kind: 'click', name: '+1+1', source: 'client', status: null, ms: null }),
+    ev({ min: 2, kind: 'click', name: '-1', source: 'client', status: null, ms: null }),
+    ev({ min: 3, kind: 'click', name: '@sum(1)', source: 'client', status: null, ms: null }),
+    ev({ min: 4, kind: 'click', name: 'normal', source: 'client', status: null, ms: null }),
+  ]);
+  const csv = await exportCsv(t.db, { kind: 'click' });
+  const lines = csv.trim().split('\r\n').slice(1);
+  assert.ok(lines.some((l) => l.includes(",'=1+1,")), 'una fórmula = se neutraliza con un apóstrofo delante');
+  assert.ok(lines.some((l) => l.includes(",'+1+1,")));
+  assert.ok(lines.some((l) => l.includes(",'-1,")));
+  assert.ok(lines.some((l) => l.includes(",'@sum(1),")));
+  assert.ok(lines.some((l) => l.includes(',normal,')), 'un valor normal no lleva apóstrofo');
+  await t.close();
 });

@@ -26,10 +26,11 @@ register({
   },
   scan_code: {
     roles: STAFF_ROLES,
+    bump: false, // solo lee y deja una fila en la bitácora de quien escanea; no cambia nada para los demás
     handler: async (ctx, input) => {
       requireCap(ctx, 'marcar_salida');
       const code = String(input.code || '').replace(/\D/g, '');
-      const req = (await listRequests(ctx.q, { date: todayOf(ctx), kind: 'salida', status: 'aprobada' })).find((r) => r.code === code);
+      const req = (await listRequests(ctx.q, { date: todayOf(ctx), kind: 'salida', status: 'aprobada', hydrate: false })).find((r) => r.code === code);
       if (!req) throw new HttpError(404, 'code_not_found', 'Código no válido o sin salida aprobada para hoy.');
       const st = await getStudent(ctx.q, req.studentId);
       await logEvent(ctx, 'Escaneó el código ' + code + ' (' + st.name + ')', ctx.staff.name);

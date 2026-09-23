@@ -86,4 +86,137 @@ CREATE INDEX IF NOT EXISTS activity_sid_at ON activity_events(sid, at);
 CREATE INDEX IF NOT EXISTS activity_kind_name_at ON activity_events(kind, name, at);
 `,
   },
+  {
+    version: '004_requests_code_unique',
+    sql: `
+UPDATE requests r SET code = lpad(((1000 + floor(random() * 8999))::int)::text, 4, '0')
+  WHERE kind='salida' AND code IS NOT NULL
+    AND EXISTS (SELECT 1 FROM requests o WHERE o.kind='salida' AND o.code IS NOT NULL AND o.date = r.date AND o.code = r.code AND o.id < r.id);
+CREATE UNIQUE INDEX IF NOT EXISTS requests_date_code ON requests(date, code) WHERE kind='salida' AND code IS NOT NULL;
+`,
+  },
+  {
+    /* Pending proactive alerts (`alert_pickup`) waiting behind whatever the chat is currently doing
+       (a draft in progress, or an urgent `confirm_pickup`): a list of { requestId }, never overwriting
+       `step`/`draft`. See queueAlert/advanceAlert/releasePickupState in domain/requests.js. */
+    version: '005_conversation_alerts',
+    sql: `
+ALTER TABLE conversation_state ADD COLUMN IF NOT EXISTS alerts jsonb NOT NULL DEFAULT '[]';
+`,
+  },
+  {
+    /* Per-tester access (review S1/S4/S5): which demo users a tester may open (NULL = all), the instant
+       before which their session tokens no longer count (logout, new PIN), and HMAC-SHA256(SESSION_SECRET, pin)
+       so a PIN is found with one indexed read. Testers created earlier keep pin_lookup NULL until their
+       first successful login fills it in (see findTesterByPin). */
+    version: '006_testers_access',
+    sql: `
+ALTER TABLE testers ADD COLUMN IF NOT EXISTS allowed_users jsonb;
+ALTER TABLE testers ADD COLUMN IF NOT EXISTS sessions_valid_after timestamptz;
+ALTER TABLE testers ADD COLUMN IF NOT EXISTS pin_lookup text;
+CREATE UNIQUE INDEX IF NOT EXISTS testers_pin_lookup ON testers(pin_lookup);
+`,
+  },
+  {
+    /* Devices (the installed /super page) that get a push notice when a tester logs in. `keys` is the
+       browser's { p256dh, auth }; a 404/410 from the push service deletes the row (see server/push.js). */
+    version: '009_push_subscriptions',
+    sql: `
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id bigserial PRIMARY KEY, tester_id text NOT NULL, endpoint text NOT NULL UNIQUE, keys jsonb NOT NULL, ua text,
+  created_at timestamptz NOT NULL, last_ok_at timestamptz, failures integer NOT NULL DEFAULT 0);
+`,
+  },
+  {
+    /* Task 15: IP, geolocalización aproximada (por cabeceras de Vercel) y huella del dispositivo por sesión.
+       `fp` es el hash corto que el cliente calcula de su huella (pantalla, plataforma, zona horaria…) y
+       manda solo en el evento `session_start`; sirve para agrupar "Dispositivos" por probador en /super sin
+       guardar nada que identifique a la persona por sí solo. La IP y la geolocalización ya vivían en las
+       columnas `ip`/`data` de `activity_events` (sin columna propia): esta migración solo añade `fp`. */
+    version: '010_activity_fingerprint',
+    sql: `
+ALTER TABLE activity_events ADD COLUMN IF NOT EXISTS fp text;
+CREATE INDEX IF NOT EXISTS activity_tester_fp ON activity_events(tester_id, fp);
+`,
+  },
+  {
+    /* Task 8 (L10): role notices ("todo el rol") were read for everyone the instant one member of
+       the role opened the app, because `mark_notifications_read` set the shared `notifications.read_at`
+       column. This table tracks who (which `users.id`) has read which role notice, so two recepcionistas
+       reading independently don't silence each other's unread badge/toasts. Personal notices
+       (`person_id`/`staff_id` target) keep using `notifications.read_at` -- only one user can ever see
+       those anyway. */
+    version: '011_notification_reads',
+    sql: `
+CREATE TABLE IF NOT EXISTS notification_reads (
+  notification_id text NOT NULL REFERENCES notifications(id) ON DELETE CASCADE,
+  user_id text NOT NULL,
+  read_at timestamptz NOT NULL,
+  PRIMARY KEY (notification_id, user_id));
+`,
+  },
+  {
+    /* C2 (calidad #2): `requests.date`/`time` were free `text` -- a malformed value (`2026-13-45`,
+       `29:99`) was only ever caught by the domain layer (isValidDate/isValidTime), never by the
+       schema itself, so a bug or a direct write could still land garbage in the table. Same for the
+       "who" columns on `requests`/`notifications`/`trip_boardings`: nothing stopped a stale or
+       mistyped id from being stored, which is exactly what produced the null-unsafe `.name` accesses
+       C3 fixes at the call sites.
+
+       This runs on `bootstrap` on every cold start (server/db/migrate.js), including against the
+       live Neon database, which already has rows written by code that predates every one of these
+       constraints -- notably `decided_by = 'auto'` for every auto-approved salida (a sentinel, not a
+       staff id) and, after however many `seed_load`/`reset_demo` cycles ran before today, possibly
+       other dangling `pickup_by`/`requested_by`/`person_id`/`staff_id`/`student_id` values. Cleaning
+       that up is not optional here: a `VALIDATE CONSTRAINT` that fails aborts the whole migration
+       transaction, and since bootstrap runs unconditionally, that takes the entire app down (503 for
+       everyone) until someone fixes the data by hand. So every FK is preceded by an `UPDATE`/`DELETE`
+       that repairs exactly the rows that would fail it -- `NULL` out `decided_by`/`pickup_by` (both
+       optional columns; the row itself is still meaningful without them) and `DELETE` the handful of
+       rows where the FK'd id is not optional (`requested_by`, `trip_boardings.student_id`) or where
+       "no valid person/staff" makes the whole notification meaningless. `request_events`/
+       `pickup_confirmations` are `ON DELETE CASCADE` on `requests.id` (see their CREATE TABLE above),
+       so deleting an orphaned request takes its history/confirmation with it instead of leaving
+       either behind. Only after that cleanup does each FK go `NOT VALID` + `VALIDATE CONSTRAINT` --
+       `NOT VALID` takes only a quick lock and does not scan/lock existing rows while adding the
+       constraint, `VALIDATE CONSTRAINT` then scans and checks them (also without a blocking exclusive
+       lock held throughout), and by that point every row satisfies it.
+
+       The two `date`/`time` CHECKs are added `NOT VALID` and deliberately left unvalidated: unlike
+       the FKs above, a malformed `date`/`time` on an old row is not safe to silently repair (there is
+       no correct value to fall back to, and the row still needs to display/print correctly), and it
+       is not safe to delete a request just because its date string is malformed either. `NOT VALID`
+       without `VALIDATE CONSTRAINT` still does exactly what C2 needs going forward -- every future
+       INSERT/UPDATE is checked -- without ever scanning historical rows or risking the migration
+       (and therefore bootstrap, and therefore the whole app) on data this migration cannot safely fix.
+
+       All five referenced tables (`persons`, `staff`, `students`, `requests`, `notifications`,
+       `trip_boardings`) are already in `MOVEMENT_TABLES` (see server/db/seed.js), so `resetAll`'s
+       single combined `TRUNCATE ... CASCADE` keeps wiping and reloading them together exactly as
+       before -- these FKs default to `ON DELETE RESTRICT` (nothing in the app ever deletes a
+       person/staff/student row outside of that reset). */
+    version: '012_integrity',
+    sql: `
+UPDATE requests SET decided_by = NULL WHERE decided_by IS NOT NULL AND decided_by NOT IN (SELECT id FROM staff);
+UPDATE requests SET pickup_by = NULL WHERE pickup_by IS NOT NULL AND pickup_by NOT IN (SELECT id FROM persons);
+DELETE FROM requests WHERE requested_by NOT IN (SELECT id FROM persons);
+DELETE FROM notifications WHERE (person_id IS NOT NULL AND person_id NOT IN (SELECT id FROM persons)) OR (staff_id IS NOT NULL AND staff_id NOT IN (SELECT id FROM staff));
+DELETE FROM trip_boardings WHERE student_id NOT IN (SELECT id FROM students);
+ALTER TABLE requests ADD CONSTRAINT requests_date_format CHECK (date ~ '^\\d{4}-\\d{2}-\\d{2}$' AND date::date IS NOT NULL) NOT VALID;
+ALTER TABLE requests ADD CONSTRAINT requests_time_format CHECK (time ~ '^\\d{2}:\\d{2}$') NOT VALID;
+ALTER TABLE requests ADD CONSTRAINT requests_requested_by_fkey FOREIGN KEY (requested_by) REFERENCES persons(id) NOT VALID;
+ALTER TABLE requests VALIDATE CONSTRAINT requests_requested_by_fkey;
+ALTER TABLE requests ADD CONSTRAINT requests_pickup_by_fkey FOREIGN KEY (pickup_by) REFERENCES persons(id) NOT VALID;
+ALTER TABLE requests VALIDATE CONSTRAINT requests_pickup_by_fkey;
+ALTER TABLE requests ADD CONSTRAINT requests_decided_by_fkey FOREIGN KEY (decided_by) REFERENCES staff(id) NOT VALID;
+ALTER TABLE requests VALIDATE CONSTRAINT requests_decided_by_fkey;
+ALTER TABLE notifications ADD CONSTRAINT notifications_person_id_fkey FOREIGN KEY (person_id) REFERENCES persons(id) NOT VALID;
+ALTER TABLE notifications VALIDATE CONSTRAINT notifications_person_id_fkey;
+ALTER TABLE notifications ADD CONSTRAINT notifications_staff_id_fkey FOREIGN KEY (staff_id) REFERENCES staff(id) NOT VALID;
+ALTER TABLE notifications VALIDATE CONSTRAINT notifications_staff_id_fkey;
+ALTER TABLE trip_boardings ADD CONSTRAINT trip_boardings_student_id_fkey FOREIGN KEY (student_id) REFERENCES students(id) NOT VALID;
+ALTER TABLE trip_boardings VALIDATE CONSTRAINT trip_boardings_student_id_fkey;
+CREATE INDEX IF NOT EXISTS activity_at ON activity_events(at);
+`,
+  },
 ];

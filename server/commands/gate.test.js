@@ -35,6 +35,29 @@ test('one-time pickup: gate asks, a titular confirms, gate marks the exit and th
   await t.close();
 });
 
+test('a denied confirmation blocks a later "Sí"; only a fresh request_confirmation reopens it (L7)', async () => {
+  const t = await makeTestApp();
+  const { result: r } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '13:00', pickupBy: 'p5', reason: 'x' });
+  await t.run('approve_request', 'u_s2', { requestId: r.id });
+  await t.run('request_confirmation', 'u_s6', { requestId: r.id });
+  await t.run('confirm_pickup', 'u_p2', { requestId: r.id, confirmed: false }); // Ana says NO
+  // Carlos's "Sí" (in flight before he saw Ana's NO, say) must not win over the denial.
+  await assert.rejects(t.run('confirm_pickup', 'u_p1', { requestId: r.id, confirmed: true }), (e) => e.status === 409 && e.code === 'pickup_denied');
+  // The denial itself cannot be re-applied either: it already stands.
+  await assert.rejects(t.run('confirm_pickup', 'u_p1', { requestId: r.id, confirmed: false }), (e) => e.status === 409 && e.code === 'pickup_denied');
+  // A request that was never asked for at all is rejected too, distinctly from a denial.
+  const { result: r2 } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-19', time: '13:00', pickupBy: 'p5', reason: 'y' });
+  await t.run('approve_request', 'u_s2', { requestId: r2.id });
+  await assert.rejects(t.run('confirm_pickup', 'u_p1', { requestId: r2.id, confirmed: true }), (e) => e.status === 409 && e.code === 'confirmation_not_requested');
+  // Only a brand-new request_confirmation from garita reopens the denied one; the denial stays in the history.
+  const { result: reopened } = await t.run('request_confirmation', 'u_s6', { requestId: r.id });
+  assert.equal(reopened.confirmation.status, 'pendiente');
+  assert.ok(reopened.history.some((h) => /Entrega NEGADA por Ana Pérez/.test(h.text)), 'the earlier denial stays in the history');
+  const { result: ok } = await t.run('confirm_pickup', 'u_p1', { requestId: r.id, confirmed: true });
+  assert.equal(ok.confirmation.status, 'confirmada');
+  await t.close();
+});
+
 test('a denied confirmation blocks the exit; confirmation is not offered for ordinary pickups', async () => {
   const t = await makeTestApp();
   const { result: r } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '13:00', pickupBy: 'p5', reason: 'x' });
@@ -48,7 +71,38 @@ test('a denied confirmation blocks the exit; confirmation is not offered for ord
   await t.close();
 });
 
-test('scan_code finds today approved salidas only and logs the scan', async () => {
+test('pickupKind is recalculated, not frozen: a titular pickup re-authorized as una_vez after approval still needs confirmation and can be delivered', async () => {
+  const t = await makeTestApp();
+  const { result: r } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '13:00', pickupBy: 'p3', reason: 'x' });
+  assert.equal(r.status, 'aprobada');
+  assert.equal(r.pickupKind, 'siempre', 'a1: grandma is authorized "siempre"');
+  await t.run('revoke_authorization', 'u_p1', { authorizationId: 'a1' });
+  await t.run('add_authorization', 'u_p1', { studentIds: ['e1'], mode: 'cuenta', cedula: '8-200-111', type: 'una_vez' });
+  /* Before the fix, request_confirmation checked the frozen req.pickupKind ('siempre') and
+     refused with confirmation_not_needed, and mark_exit then refused with confirmation_required:
+     nobody could ever release the student. */
+  const { result: c } = await t.run('request_confirmation', 'u_s6', { requestId: r.id });
+  assert.equal(c.confirmation.status, 'pendiente');
+  await t.run('confirm_pickup', 'u_p1', { requestId: r.id, confirmed: true });
+  const { result: done } = await t.run('mark_exit', 'u_s6', { requestId: r.id });
+  assert.equal(done.status, 'retirado');
+  await t.close();
+});
+
+test('mark_exit only works for today; an approved salida from another day shows as vencida in the views', async () => {
+  const t = await makeTestApp();
+  const { result: r } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '13:00', pickupBy: 'p1', reason: 'x' });
+  assert.equal(r.status, 'aprobada');
+  t.clock.now = new Date('2026-09-19T15:00:00Z'); // next day, garita never scanned the code
+  await assert.rejects(t.run('mark_exit', 'u_s6', { requestId: r.id }), (e) => e.code === 'not_today');
+  const view = await t.view('u_p1');
+  const found = view.requests.find((x) => x.id === r.id);
+  assert.equal(found.status, 'aprobada', 'the DB status is not changed');
+  assert.equal(found.expired, true, 'but it is shown as vencida');
+  await t.close();
+});
+
+test("scan_code finds today's approved salidas only and logs the scan", async () => {
   const t = await makeTestApp();
   const { result: r } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '13:00', pickupBy: 'p1', reason: 'x' });
   const { result: found } = await t.run('scan_code', 'u_s6', { code: ' ' + r.code + ' ' });

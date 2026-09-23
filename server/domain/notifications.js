@@ -1,10 +1,10 @@
 import { uid } from './ids.js';
-import { insertNotification, getPerson, getStudent, listStaff, insertAudit } from '../db/repo.js';
+import { insertNotification, insertAudit } from '../db/repo.js';
 
 export const actorLabel = (ctx) => (ctx.staff && ctx.staff.name) || (ctx.person && ctx.person.name) || 'Sistema';
 
 export async function notifyPerson(ctx, personId, text, opts = {}) {
-  const p = await getPerson(ctx.q, personId);
+  const p = await ctx.getPerson(personId);
   if (!p) return;
   await insertNotification(ctx.q, { id: uid('n'), personId, text, kind: opts.kind || 'info', buttons: opts.buttons || null }, ctx.now);
   if (p.phone) await ctx.transport.send(ctx, personId, { text, buttons: opts.buttons || null });
@@ -16,9 +16,9 @@ export async function notifyStaff(ctx, staffId, text) {
   await insertNotification(ctx.q, { id: uid('n'), staffId, text, kind: 'school' }, ctx.now);
 }
 export async function notifyTeachers(ctx, studentId, text) {
-  const st = await getStudent(ctx.q, studentId);
+  const st = await ctx.getStudent(studentId);
   if (!st) return;
-  for (const s of await listStaff(ctx.q)) if (s.role === 'profesor' && (s.grades || []).includes(st.grade)) await notifyStaff(ctx, s.id, text);
+  for (const s of await ctx.staffList()) if (s.role === 'profesor' && (s.grades || []).includes(st.grade)) await notifyStaff(ctx, s.id, text);
 }
 export async function logEvent(ctx, text, actorName = 'Sistema') {
   await insertAudit(ctx.q, {

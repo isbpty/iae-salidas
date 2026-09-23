@@ -18,13 +18,13 @@
       <button class="btn ghost" id="simBtn" style="display:none">▶ Simulador</button>
       <button class="btn ghost danger" data-action="resetDemo" id="resetBtn" style="display:none">↺ Reiniciar</button>
       <button class="btn ghost" data-action="switchUser" id="switchBtn" style="display:none">🔁 Cambiar usuario</button>
-      <button class="btn ghost" data-action="logout" id="logoutBtn" style="display:none">Salir</button>
+      <button class="btn ghost" data-action="logout" id="logoutBtn" style="display:none" title="Salir en todos los dispositivos: cierra todas las sesiones de tu PIN">Salir</button>
     </div>
   </header>
   <main id="main"></main>
   <div id="toasts"></div>
   <div id="modal" class="modal hidden"></div>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js" integrity="sha384-3zSEDfvllQohrq0PHL1fOXJuC/jSOO34H46t6UQfobFOmxE5BpjjaIJY5F2/bMnU" crossorigin="anonymous"></script>
   <script src="client/format.js"></script>
   <script src="client/api.js"></script>
   <script src="client/telemetry.js"></script>
@@ -32,6 +32,12 @@
   <script src="client/model.js"></script>
   <script src="client/qr.js"></script>
   <script src="client/simulator.js"></script>
-  <script src="client/views.js"></script>
+  <script src="client/views-core.js"></script>
+  <script src="client/views-parent.js"></script>
+  <script src="client/views-school.js"></script>
+  <script src="client/views-gate.js"></script>
+  <script src="client/views-bus.js"></script>
+  <script src="client/modals.js"></script>
+  <script src="client/actions.js"></script>
 </body>
 </html>

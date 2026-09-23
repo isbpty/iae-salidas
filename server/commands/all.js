@@ -7,4 +7,5 @@ import './bus.js';
 import './whatsapp.js';
 import './admin.js';
 import './summary.js';
+import './simulator.js';
 export {};

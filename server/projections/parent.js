@@ -1,5 +1,14 @@
-import { listPersons, listAuthorizations, listRequests, listNotifications, listChat, getConversation, listRoutes, listTripsOn, listStaff } from '../db/repo.js';
-import { studentsOf, authorizedFor, todayOf } from '../domain/eligibility.js';
+import { listPersons, listAuthorizations, listRequests, listNotifications, countUnreadNotifications, listChat, getConversation, listRoutes, listTripsOn, listStaff } from '../db/repo.js';
+import { studentsOf, authorizedFor, todayOf, withAuthExpiry } from '../domain/eligibility.js';
+import { withExpired } from '../domain/requests.js';
+import { shiftISO } from '../domain/time.js';
+
+/* R3: same "hoy + pendientes + últimos 14 días" window as the staff views -- a parent's own
+   history is smaller, but a family that has used the app for years still doesn't need every salida
+   ever requested loaded on every poll. */
+const REQUEST_WINDOW_DAYS = 14;
+/* R3: "avisos: últimos 100". */
+const NOTIFICATION_LIMIT = 100;
 
 export const publicPerson = ({ id, name, phone, cedula, relation, hasAccount, docName, docAttachmentId }) => ({ id, name, phone, cedula, relation, hasAccount, docName, docAttachmentId });
 /* What a parent may know about somebody outside their own family: enough to name them in a list,
@@ -12,8 +21,9 @@ export async function parentView(ctx) {
   const ids = students.map((s) => s.id);
   const all = await listPersons(ctx.q);
   const byId = Object.fromEntries(all.map((p) => [p.id, p]));
-  const authorizations = await listAuthorizations(ctx.q, { studentIds: ids, includeRevoked: false });
-  const requests = await listRequests(ctx.q, { studentIds: ids });
+  const authorizations = withAuthExpiry(await listAuthorizations(ctx.q, { studentIds: ids, includeRevoked: false }), ctx);
+  const since = shiftISO(ctx.now, ctx.tz, -REQUEST_WINDOW_DAYS);
+  const requests = withExpired(await listRequests(ctx.q, { studentIds: ids, since }), todayOf(ctx));
   const wanted = new Set([me.id]);
   for (const s of students) for (const t of s.titulares) wanted.add(t);
   for (const a of authorizations) { wanted.add(a.personId); if (a.createdBy) wanted.add(a.createdBy); }
@@ -33,22 +43,24 @@ export async function parentView(ctx) {
   const routeIds = new Set(students.map((s) => s.routeId).filter(Boolean));
   const routes = (await listRoutes(ctx.q)).filter((r) => routeIds.has(r.id));
   const trips = (await listTripsOn(ctx.q, todayOf(ctx))).filter((t) => routeIds.has(t.routeId));
-  const notifications = await listNotifications(ctx.q, { personId: me.id });
+  const notifications = await listNotifications(ctx.q, { personId: me.id }, { limit: NOTIFICATION_LIMIT });
+  /* The list is capped at 100; below the cap it holds every notice, so counting it is exact and saves
+     a query. At the cap, `unread` comes from a COUNT over all of them (not just the newest 100). */
+  const unread = notifications.length < NOTIFICATION_LIMIT ? notifications.filter((n) => !n.read).length : await countUnreadNotifications(ctx.q, { personId: me.id });
   return {
     me: publicPerson(me),
     students,
     persons,
-    accounts: all.filter((p) => p.hasAccount && p.id !== me.id).map(({ id, name, relation }) => ({ id, name, relation })),
     authorizations,
     authorizedFor: forOthers.map((x) => ({ auth: x.auth, createdByName: (byId[x.auth.createdBy] || {}).name || null, student: { id: x.student.id, name: x.student.name, grade: x.student.grade, emoji: x.student.emoji } })),
     requests,
     notifications,
     chat: await listChat(ctx.q, me.id),
-    chatState: await getConversation(ctx.q, me.id),
+    chatState: await getConversation(ctx.q, me.id, ctx),
     routes,
     trips,
     gpsNow: Object.fromEntries(routes.map((r) => [r.id, ctx.gps.position(r, ctx)])),
     staffNames: Object.fromEntries((await listStaff(ctx.q)).map((s) => [s.id, s.name])),
-    unread: notifications.filter((n) => !n.read).length,
+    unread,
   };
 }

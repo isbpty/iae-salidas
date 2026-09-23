@@ -2,8 +2,12 @@ import { shiftISO } from '../domain/time.js';
 import { insertRow, saveSettings, setPermission, getRevision } from './repo.js';
 
 /* `testers` and `activity_events` are deliberately absent: tester PINs and the activity history survive every
-   demo reset (the simulator resets the demo on each run); only the /super purge deletes activity. */
-const MOVEMENT_TABLES = ['login_attempts', 'audit_log', 'bus_opt_outs', 'trip_boardings', 'trips', 'conversation_state', 'chat_messages', 'notifications', 'pickup_confirmations', 'request_events', 'requests', 'authorizations', 'guardianships', 'users', 'students', 'persons', 'attachments', 'stops', 'routes', 'role_permissions', 'staff', 'levels', 'app_meta', 'settings'];
+   demo reset (the simulator resets the demo on each run); only the /super purge deletes activity.
+   `login_attempts` too: a reset must not wipe the failed-login counters (nor the used PIN tokens). */
+const MOVEMENT_TABLES = ['audit_log', 'bus_opt_outs', 'trip_boardings', 'trips', 'conversation_state', 'chat_messages', 'notifications', 'pickup_confirmations', 'request_events', 'requests', 'authorizations', 'guardianships', 'users', 'students', 'persons', 'attachments', 'stops', 'routes', 'role_permissions', 'staff', 'levels', 'settings'];
+/* `app_meta` is not truncated: the revision must stay monotonic (a reset that went back to 1 let a hidden tab
+   accept a 304 with pre-reset data), and the simulator lock and push/purge cooldowns live there. `seedDemo`
+   bumps the revision with ON CONFLICT. */
 
 export async function resetAll(q) { await q.exec(`TRUNCATE ${MOVEMENT_TABLES.join(', ')} RESTART IDENTITY CASCADE`); }
 export async function isEmpty(q) { return (await q.query('SELECT count(*)::int AS c FROM users'))[0].c === 0; }
@@ -63,7 +67,11 @@ export async function seedDemo(q, { now, tz }) {
   ];
   for (const p of persons) {
     const bytes = svgDoc(p.docName.startsWith('foto') ? 'Foto' : 'Cédula', p.name);
-    await insertRow(q, 'attachments', { id: 'att_' + p.id, ownerPersonId: p.id, purpose: p.docName.startsWith('foto') ? 'foto' : 'cedula', mime: 'image/svg+xml', bytes, size: bytes.length, name: p.docName });
+    /* S9: `createdAt` explícito (como en `authorizations`/`requests` más abajo) y no el `now()` real de
+       la base -- si no, la cuota diaria y la limpieza de huérfanos (ambas contra `attachments.created_at`,
+       Task 11) contarían estos documentos del seed como "de hoy" cada vez que la prueba corre un día
+       distinto al `now` simulado. */
+    await insertRow(q, 'attachments', { id: 'att_' + p.id, ownerPersonId: p.id, purpose: p.docName.startsWith('foto') ? 'foto' : 'cedula', mime: 'image/svg+xml', bytes, size: bytes.length, name: p.docName, createdAt: at(T - 40 * 24 * H) });
     await insertRow(q, 'persons', { ...p, docAttachmentId: 'att_' + p.id });
   }
 

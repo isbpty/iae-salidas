@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeTestApp } from '../test-helpers.js';
-import { getSettings, getPermissions, listNotifications, listAudit } from '../db/repo.js';
+import { getSettings, getPermissions, listNotifications, listAudit, insertRow } from '../db/repo.js';
 
 test('update_settings validates and merges, and logs the change', async () => {
   const t = await makeTestApp();
@@ -44,9 +44,9 @@ test('reset_demo wipes movement and reseeds; mark_notifications_read marks mine'
   assert.equal((await listNotifications(t.db, { personId: 'p2' })).filter((n) => !n.read).length, 2);
   await t.run('mark_notifications_read', 'u_p2', {});
   assert.equal((await listNotifications(t.db, { personId: 'p2' })).filter((n) => !n.read).length, 0);
-  assert.ok((await listNotifications(t.db, { role: 'garita' })).some((n) => !n.read));
+  assert.ok((await t.view('u_s6')).unread > 0, 'garita has an unread role notice');
   await t.run('mark_notifications_read', 'u_s6', {});
-  assert.equal((await listNotifications(t.db, { role: 'garita' })).filter((n) => !n.read).length, 0);
+  assert.equal((await t.view('u_s6')).unread, 0);
   await assert.rejects(t.run('reset_demo', 'u_s2', {}), /forbidden_role/);
   const { result, revision } = await t.run('reset_demo', 'u_s1', {});
   assert.ok(result.revision >= 1);
@@ -55,5 +55,35 @@ test('reset_demo wipes movement and reseeds; mark_notifications_read marks mine'
   assert.equal(v.requests.length, 0);
   assert.equal(v.notifications.length, 0);
   assert.equal(v.students.length, 2);
+  await t.close();
+});
+
+test('role notices are read per user: one recepcionista reading does not silence another (L10)', async () => {
+  const t = await makeTestApp();
+  /* A second recepción account, alongside the seeded Yadira (s2/u_s2) -- e.g. a garita con TV y
+     móvil, o dos personas en recepción. */
+  await insertRow(t.db, 'staff', { id: 's9', name: 'Marta Solís', role: 'recepcion', title: 'Recepción' });
+  await insertRow(t.db, 'users', { id: 'u_s9', kind: 'staff', refId: 's9', name: 'Marta Solís', role: 'recepcion' });
+
+  await t.run('create_excusa', 'u_p7', { studentId: 'e4', date: '2026-09-19', excusaType: 'ausencia', reason: 'Cita médica' });
+
+  const before2 = await t.view('u_s2');
+  const before9 = await t.view('u_s9');
+  const notice = before2.notifications.find((n) => /^Nueva excusa: Emily Chen/.test(n.text));
+  assert.ok(notice, 'Yadira sees the new role notice');
+  assert.equal(notice.read, false);
+  const notice9 = before9.notifications.find((n) => n.id === notice.id);
+  assert.ok(notice9, 'Marta sees the same role notice');
+  assert.equal(notice9.read, false);
+  const unread9Before = before9.unread;
+  assert.ok(unread9Before > 0);
+
+  await t.run('mark_notifications_read', 'u_s2', {});
+
+  const after2 = await t.view('u_s2');
+  const after9 = await t.view('u_s9');
+  assert.equal(after2.notifications.find((n) => n.id === notice.id).read, true, 'Yadira now sees it read');
+  assert.equal(after9.notifications.find((n) => n.id === notice.id).read, false, 'Marta still sees it unread');
+  assert.equal(after9.unread, unread9Before, "Marta's unread count is untouched");
   await t.close();
 });

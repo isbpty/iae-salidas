@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { makeTestApp, call, loginAs } from './test-helpers.js';
-import { maskInput, classify } from './activity.js';
+import { makeTestApp, call, loginAs, loginSuper, CONFIG } from './test-helpers.js';
+import { maskInput, classify, clientInfo, sanitizeFingerprint } from './activity.js';
 
 const post = (base, path, body, cookie) => call(base, path, { method: 'POST', body, cookie });
 const rows = (t, where = '', params = []) => t.db.query('SELECT * FROM activity_events ' + where + ' ORDER BY id', params);
@@ -52,8 +52,9 @@ test('every API request leaves a server event with who, what, duration and outco
   assert.equal(byName['auth/logout'].kind, 'logout');
   assert.ok(ev.every((e) => e.source === 'server' && e.tester_id === 't5'));
 
-  /* a successful command records its revision and masked input */
-  const okCmd = await post(base, '/api/commands/mark_notifications_read', { pin: '1' }, cookie);
+  /* a successful command records its revision and masked input (logout revoked the old cookie: log in again) */
+  const again = await loginAs(base, 'u_p1', made[4].pin);
+  const okCmd = await post(base, '/api/commands/mark_notifications_read', { pin: '1' }, again);
   const last = (await rows(t)).pop();
   assert.equal(last.ok, true); assert.equal(last.revision, okCmd.json.revision); assert.deepEqual(last.data, { pin: '***' });
   await close(); await t.close();
@@ -84,4 +85,189 @@ test('telemetry stores client events under the cookie identity only', async () =
   assert.equal(big.json.stored, 100, 'batches are capped');
   assert.equal((await post(base, '/api/telemetry', {}, cookie)).json.stored, 0);
   await close(); await t.close();
+});
+
+test('clientInfo: geolocation only behind Vercel; the IP only trusts x-forwarded-for there', () => {
+  const headers = {
+    'x-forwarded-for': '203.0.113.9, 10.0.0.1', 'user-agent': 'UA/1',
+    'x-vercel-ip-country': 'PA', 'x-vercel-ip-country-region': '8', 'x-vercel-ip-city': encodeURIComponent('Ciudad de Panamá'),
+    'x-vercel-ip-latitude': '8.98', 'x-vercel-ip-longitude': '-79.52', 'x-vercel-ip-timezone': 'America/Panama',
+  };
+  const req = { socket: { remoteAddress: '10.0.0.5' }, headers };
+  const local = clientInfo(req, false);
+  assert.equal(local.ip, '10.0.0.5', 'a direct listener never trusts a forwarded header (S: IP spoofing)');
+  assert.equal(local.geo, null, 'no Vercel edge, no geo');
+  const remote = clientInfo(req, true);
+  assert.equal(remote.ip, '203.0.113.9');
+  assert.deepEqual(remote.geo, { country: 'PA', region: '8', city: 'Ciudad de Panamá', lat: 8.98, lng: -79.52, tz: 'America/Panama' });
+  assert.equal(clientInfo({ socket: {}, headers: {} }, true).geo, null, 'serverless but no Vercel headers: still null');
+});
+
+test('sanitizeFingerprint keeps only the whitelisted device-fingerprint keys', () => {
+  assert.deepEqual(sanitizeFingerprint({ platform: 'Win32', fp: 'abc123def0', evil: 'drop table', cookie: 'steal-me' }), { platform: 'Win32', fp: 'abc123def0' });
+  assert.equal(sanitizeFingerprint({ evil: 1 }), null, 'nothing left of the whitelist: null, not an empty object');
+  assert.equal(sanitizeFingerprint(null), null);
+  assert.equal(sanitizeFingerprint('nope'), null);
+});
+
+test('login/pin/switch/super_login events carry the IP geolocation when the request is serverless', async () => {
+  const t = await makeTestApp({ config: { serverless: true } }); const { base, close } = await t.listen();
+  const { result: made } = await t.run('create_testers', 'u_s1');
+  const geoHeaders = {
+    'x-forwarded-for': '198.51.100.7', 'x-vercel-ip-country': 'PA', 'x-vercel-ip-country-region': '4',
+    'x-vercel-ip-city': 'David', 'x-vercel-ip-latitude': '8.43', 'x-vercel-ip-longitude': '-82.43', 'x-vercel-ip-timezone': 'America/Panama',
+  };
+  const geo = { country: 'PA', region: '4', city: 'David', lat: 8.43, lng: -82.43, tz: 'America/Panama' };
+  const call2 = (path, body, cookie) => call(base, path, { method: 'POST', body, cookie, headers: geoHeaders });
+
+  await call2('/api/auth/pin', { pin: made[0].pin });
+  const login = await call2('/api/auth/login', { userId: 'u_p1', pin: made[4].pin });
+  const cookie = login.headers.get('set-cookie').split(';')[0];
+  await call2('/api/auth/switch', { userId: 'u_p2' }, cookie);
+  const sup = await call2('/api/auth/super', { pin: made[0].pin, key: CONFIG.superKey });
+  assert.equal(sup.status, 200);
+
+  const ev = await rows(t);
+  const byKind = Object.fromEntries(ev.map((e) => [e.kind, e]));
+  assert.deepEqual(byKind.pin.data, { geo }); assert.equal(byKind.pin.ip, '198.51.100.7');
+  assert.deepEqual(byKind.login.data, { geo });
+  assert.deepEqual(byKind.switch_user.data, { geo });
+  assert.deepEqual(byKind.super_login.data, { geo });
+  /* geo never leaks into events that are not the entry points listed in the brief */
+  assert.equal(ev.find((e) => e.kind === 'view'), undefined, 'no view yet in this test, but just in case: never geo-tagged');
+  await close(); await t.close();
+});
+
+test('geolocation stays null without the Vercel headers, even when serverless; spoofed Vercel headers are ignored outside serverless', async () => {
+  const t1 = await makeTestApp({ config: { serverless: true } }); const s1 = await t1.listen();
+  const { result: made1 } = await t1.run('create_testers', 'u_s1');
+  await post(s1.base, '/api/auth/login', { userId: 'u_p1', pin: made1[4].pin });
+  assert.equal((await rows(t1))[0].data, null, 'serverless, but no x-vercel-ip-* headers at all: no geo key');
+  await s1.close(); await t1.close();
+
+  const t2 = await makeTestApp({ config: { serverless: false } }); const s2 = await t2.listen();
+  const { result: made2 } = await t2.run('create_testers', 'u_s1');
+  await call(s2.base, '/api/auth/login', {
+    method: 'POST', body: { userId: 'u_p1', pin: made2[4].pin },
+    headers: { 'x-vercel-ip-country': 'PA', 'x-vercel-ip-city': 'Panamá' },
+  });
+  const row = (await rows(t2))[0];
+  assert.equal(row.data, null, 'not serverless: Vercel-looking headers from an untrusted caller are never trusted');
+  await s2.close(); await t2.close();
+});
+
+test('session_start events keep only the whitelisted fingerprint keys and copy fp to its own column', async () => {
+  const t = await makeTestApp(); const { base, close } = await t.listen();
+  const cookie = await loginAs(base, 'u_p1');
+  const events = [{
+    kind: 'session_start', name: 'app', data: {
+      width: 1280, height: 800, lang: 'es-PA', screenWidth: 1512, screenHeight: 982, devicePixelRatio: 2, colorDepth: 24,
+      languages: ['es-PA', 'es'], platform: 'MacIntel', hardwareConcurrency: 8, deviceMemory: 8, maxTouchPoints: 0,
+      tz: 'America/Panama', connection: '4g', uaData: { brands: ['Chrome 128'], mobile: false, platform: 'macOS' }, standalone: false,
+      fp: 'abc123def456f001', evil: 'drop table activity_events', cookie: 'steal-me',
+    },
+  }];
+  const r = await post(base, '/api/telemetry', { events }, cookie);
+  assert.equal(r.json.stored, 1);
+  const [ev] = await t.db.query("SELECT * FROM activity_events WHERE kind='session_start' ORDER BY id DESC LIMIT 1");
+  assert.equal(ev.fp, 'abc123def456f001');
+  assert.equal(ev.data.evil, undefined, 'unknown keys are dropped, not just unmasked');
+  assert.equal(ev.data.cookie, undefined);
+  assert.equal(ev.data.platform, 'MacIntel'); assert.equal(ev.data.tz, 'America/Panama');
+  assert.deepEqual(ev.data.uaData, { brands: ['Chrome 128'], mobile: false, platform: 'macOS' });
+  assert.equal(ev.data.width, 1280, 'width/height keep their usual (viewport) meaning');
+
+  /* a non-session_start event never writes the fp column, even if it happens to carry an `fp` key */
+  const other = await post(base, '/api/telemetry', { events: [{ kind: 'click', name: 'x', data: { fp: 'nope', note: 'ok' } }] }, cookie);
+  assert.equal(other.json.stored, 1);
+  const [clickEv] = await t.db.query("SELECT * FROM activity_events WHERE kind='click' ORDER BY id DESC LIMIT 1");
+  assert.equal(clickEv.fp, null); assert.deepEqual(clickEv.data, { fp: 'nope', note: 'ok' });
+  await close(); await t.close();
+});
+
+test('POST /api/super/fp records the super admin\'s own device fingerprint (needs the super cookie, not the app session)', async () => {
+  const t = await makeTestApp(); const { base, close } = await t.listen();
+  const { result: made } = await t.run('create_testers', 'u_s1');
+  assert.equal((await post(base, '/api/super/fp', { fp: { platform: 'Win32', fp: 'superfp01' } })).status, 401, 'no cookie at all');
+  const app = await loginAs(base, 'u_s1', made[0].pin);
+  assert.equal((await post(base, '/api/super/fp', { fp: { platform: 'Win32', fp: 'superfp01' } }, app)).status, 401, 'an app session is not a super session');
+
+  const sup = await loginSuper(base, made[0].pin);
+  const r = await post(base, '/api/super/fp', { fp: { platform: 'Win32', evil: 'drop table', fp: 'a0b1c2d3e4' } }, sup);
+  assert.deepEqual(r.json, { ok: true });
+  const [ev] = await t.db.query("SELECT * FROM activity_events WHERE kind='session_start' AND role='super' ORDER BY id DESC LIMIT 1");
+  assert.equal(ev.tester_id, 't1'); assert.equal(ev.fp, 'a0b1c2d3e4'); assert.equal(ev.data.platform, 'Win32'); assert.equal(ev.data.evil, undefined);
+  /* classify() ignores this path: recordRequest never adds a second, redundant 'super_action' row for it */
+  assert.equal((await t.db.query("SELECT count(*)::int AS c FROM activity_events WHERE name = 'super/fp'"))[0].c, 0);
+  await close(); await t.close();
+});
+
+/* S7: el cliente no puede mandar `kind: 'command'` (ni ningún otro kind fuera de la lista blanca): así un
+   padre no puede hacer pasar un evento suyo por una acción o un error del servidor. */
+test('telemetry: un kind fuera de la lista blanca (p. ej. "command", reservado al servidor) se descarta en silencio', async () => {
+  const t = await makeTestApp(); const { base, close } = await t.listen();
+  const cookie = await loginAs(base, 'u_p1');
+  const events = [
+    { kind: 'command', name: 'approve_request', ok: false }, // se hace pasar por una acción/error del servidor
+    { kind: 'nope', name: 'x' }, // ni siquiera un kind razonable
+    { kind: 'click', name: 'real' }, // este sí es de la lista blanca
+  ];
+  const r = await post(base, '/api/telemetry', { events }, cookie);
+  assert.equal(r.json.stored, 1, 'solo el evento de la lista blanca se guarda');
+  const rows = await t.db.query("SELECT kind, name FROM activity_events WHERE source='client' ORDER BY id");
+  assert.deepEqual(rows, [{ kind: 'click', name: 'real' }]);
+  await close(); await t.close();
+});
+
+/* S7: el `data` de un evento (ya enmascarado) se acota a 2 KB; el evento se guarda igual, solo que sin
+   `data`, en vez de rechazarse entero o dejar crecer la fila sin límite. */
+test('telemetry: un `data` que pese más de 2 KB ya enmascarado se guarda como null, no rechaza el evento', async () => {
+  const t = await makeTestApp(); const { base, close } = await t.listen();
+  const cookie = await loginAs(base, 'u_p1');
+  const data = {};
+  for (let i = 0; i < 20; i++) data['k' + i] = 'y'.repeat(190); // cada string sobrevive maskInput (< 200), pero suman > 2 KB
+  const small = { note: 'ok' };
+  const r = await post(base, '/api/telemetry', { events: [{ kind: 'click', name: 'big', data }, { kind: 'click', name: 'small', data: small }] }, cookie);
+  assert.equal(r.json.stored, 2);
+  const rows = await t.db.query("SELECT name, data FROM activity_events WHERE source='client' ORDER BY id");
+  assert.equal(rows.find((r) => r.name === 'big').data, null, 'se descarta el data, no el evento');
+  assert.deepEqual(rows.find((r) => r.name === 'small').data, small, 'un data pequeño se guarda tal cual');
+  await close(); await t.close();
+});
+
+/* R7: máximo ~30 lotes de telemetría por minuto por `sid` -> 429 too_many_batches. */
+test('telemetry: más de ~30 lotes por minuto del mismo sid → 429 too_many_batches', async () => {
+  const t = await makeTestApp(); const { base, close } = await t.listen();
+  const cookie = await loginAs(base, 'u_p1');
+  let last;
+  for (let i = 0; i < 31; i++) last = await post(base, '/api/telemetry', { events: [{ kind: 'click', name: 'n' + i }] }, cookie);
+  assert.equal(last.status, 429); assert.equal(last.json.error, 'too_many_batches');
+  await close(); await t.close();
+});
+
+test('sanitizeFingerprint acota cada valor de la lista blanca, no solo las claves', () => {
+  const longString = 'x'.repeat(500);
+  const bigArray = Array.from({ length: 30 }, (_, i) => 'lang' + i);
+  const m = sanitizeFingerprint({
+    platform: longString,
+    languages: bigArray,
+    devicePixelRatio: 2.5,
+    hardwareConcurrency: NaN,
+    standalone: false,
+    uaData: { brands: ['Chrome 128'], mobile: false, platform: 'macOS', evil: 'drop table' },
+    connection: { nested: 'object, not a string' },
+    fp: 'abc123def456f001',
+  });
+  assert.equal(m.platform.length, 120, 'un string de la lista blanca se acota igual que maskInput');
+  assert.equal(m.languages.length, 10, 'un array se acota a 10 elementos');
+  assert.equal(m.devicePixelRatio, 2.5);
+  assert.equal(m.hardwareConcurrency, null, 'un número no finito no se guarda tal cual');
+  assert.equal(m.standalone, false);
+  assert.deepEqual(m.uaData, { brands: ['Chrome 128'], mobile: false, platform: 'macOS' }, 'claves de uaData también con lista blanca propia');
+  assert.equal(m.connection, undefined, 'un objeto donde se esperaba un valor simple se descarta');
+  assert.equal(m.fp, 'abc123def456f001');
+
+  assert.equal(sanitizeFingerprint({ platform: 'Win32', fp: 'not-hex-!!' }).fp, undefined, 'un fp que no es hex se descarta (no bloquea el resto)');
+  assert.equal(sanitizeFingerprint({ platform: 'Win32', fp: 'ab' }).fp, undefined, 'un fp demasiado corto (< 8) también se descarta');
+  assert.equal(sanitizeFingerprint({ fp: 'A0B1C2D3' }).fp, 'A0B1C2D3', 'hex en mayúsculas también vale');
 });
