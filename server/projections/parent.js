@@ -1,6 +1,12 @@
 import { listPersons, listAuthorizations, listRequests, listNotifications, listChat, getConversation, listRoutes, listTripsOn, listStaff } from '../db/repo.js';
 import { studentsOf, authorizedFor, todayOf, withAuthExpiry } from '../domain/eligibility.js';
 import { withExpired } from '../domain/requests.js';
+import { shiftISO } from '../domain/time.js';
+
+/* R3: same "hoy + pendientes + últimos 14 días" window as the staff views -- a parent's own
+   history is smaller, but a family that has used the app for years still doesn't need every salida
+   ever requested loaded on every poll. */
+const REQUEST_WINDOW_DAYS = 14;
 
 export const publicPerson = ({ id, name, phone, cedula, relation, hasAccount, docName, docAttachmentId }) => ({ id, name, phone, cedula, relation, hasAccount, docName, docAttachmentId });
 /* What a parent may know about somebody outside their own family: enough to name them in a list,
@@ -14,7 +20,8 @@ export async function parentView(ctx) {
   const all = await listPersons(ctx.q);
   const byId = Object.fromEntries(all.map((p) => [p.id, p]));
   const authorizations = withAuthExpiry(await listAuthorizations(ctx.q, { studentIds: ids, includeRevoked: false }), ctx);
-  const requests = withExpired(await listRequests(ctx.q, { studentIds: ids }), todayOf(ctx));
+  const since = shiftISO(ctx.now, ctx.tz, -REQUEST_WINDOW_DAYS);
+  const requests = withExpired(await listRequests(ctx.q, { studentIds: ids, since }), todayOf(ctx));
   const wanted = new Set([me.id]);
   for (const s of students) for (const t of s.titulares) wanted.add(t);
   for (const a of authorizations) { wanted.add(a.personId); if (a.createdBy) wanted.add(a.createdBy); }
@@ -34,7 +41,7 @@ export async function parentView(ctx) {
   const routeIds = new Set(students.map((s) => s.routeId).filter(Boolean));
   const routes = (await listRoutes(ctx.q)).filter((r) => routeIds.has(r.id));
   const trips = (await listTripsOn(ctx.q, todayOf(ctx))).filter((t) => routeIds.has(t.routeId));
-  const notifications = await listNotifications(ctx.q, { personId: me.id });
+  const notifications = await listNotifications(ctx.q, { personId: me.id }, { limit: 100 });
   return {
     me: publicPerson(me),
     students,

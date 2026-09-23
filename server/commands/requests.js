@@ -1,8 +1,13 @@
 import { register } from './index.js';
 import { requireCap, requireTitular, STAFF_ROLES } from './guards.js';
-import { createRequest, approveRequest, rejectRequest, acceptExcusa, cancelRequest, staffCancelRequest } from '../domain/requests.js';
-import { getRequest, getAttachment } from '../db/repo.js';
+import { createRequest, approveRequest, rejectRequest, acceptExcusa, cancelRequest, staffCancelRequest, withExpired } from '../domain/requests.js';
+import { todayOf } from '../domain/eligibility.js';
+import { isValidDate } from '../domain/time.js';
+import { getRequest, getAttachment, listStudents, searchRequests } from '../db/repo.js';
 import { deny, notFound, badRequest, conflict } from '../domain/errors.js';
+
+const REQUEST_STATUSES = ['pendiente', 'aprobada', 'rechazada', 'retirado', 'cancelada', 'aceptada'];
+const can = (ctx, cap) => ctx.user.role === 'admin' || !!(ctx.permissions[ctx.user.role] || {})[cap];
 
 async function ownRequest(ctx, requestId) {
   const r = await getRequest(ctx.q, requestId);
@@ -74,6 +79,27 @@ register({
       const reason = String(input.reason || '').trim();
       if (!reason) badRequest('reason_required');
       return staffCancelRequest(ctx, r.id, reason, ctx.staff.id);
+    },
+  },
+  /* R3: the staff views only carry "hoy + pendientes + últimos 14 días" -- this is how the search
+     box in Salidas reaches further back, on demand, instead of every view paying to load the whole
+     history. Read-only (`bump: false`), capped at 200 rows, scoped to the same students the caller
+     can already see (same rule as `staffView`). */
+  search_requests: {
+    roles: STAFF_ROLES,
+    bump: false,
+    handler: async (ctx, input) => {
+      requireCap(ctx, 'ver_solicitudes');
+      const everyone = await listStudents(ctx.q);
+      const students = can(ctx, 'todos_niveles') ? everyone : ctx.staff.routeId ? everyone.filter((s) => s.routeId === ctx.staff.routeId) : everyone.filter((s) => (ctx.staff.grades || []).includes(s.grade));
+      const studentIds = students.map((s) => s.id);
+      const text = String(input.q || '').trim().slice(0, 100);
+      const from = isValidDate(input.from) ? input.from : null;
+      const to = isValidDate(input.to) ? input.to : null;
+      const status = REQUEST_STATUSES.includes(input.status) ? input.status : null;
+      const kind = ['salida', 'excusa'].includes(input.kind) ? input.kind : null;
+      const rows = await searchRequests(ctx.q, { studentIds, text, from, to, status, kind, limit: 200 });
+      return withExpired(rows, todayOf(ctx));
     },
   },
 });

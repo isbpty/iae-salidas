@@ -1,6 +1,6 @@
 import { register } from './index.js';
 import { handleIncoming } from '../bot/conversation.js';
-import { getPerson } from '../db/repo.js';
+import { getPerson, listChat } from '../db/repo.js';
 import { deny, notFound, badRequest } from '../domain/errors.js';
 
 register({
@@ -21,6 +21,21 @@ register({
       if (!chatKey) badRequest('chat_key_required');
       await handleIncoming({ ...ctx, channel: 'whatsapp' }, chatKey, text);
       return { chatKey };
+    },
+  },
+  /* R3: the admin view now only carries a summary per chat (`listChatSummaries`); this loads the
+     full transcript for one phone on demand, when the admin actually picks it in the simulator.
+     Same demo-only gate as `whatsapp_inbound`'s "foreign chat" case -- an admin has no chat of their
+     own, so every chat it reads here is, by definition, someone else's real WhatsApp history. */
+  get_chat: {
+    roles: ['admin'],
+    bump: false,
+    handler: async (ctx, input) => {
+      const chatKey = input.chatKey;
+      if (!chatKey) badRequest('chat_key_required');
+      if (ctx.config.demoMode === false) deny('demo_only');
+      if (chatKey !== 'unknown' && !(await getPerson(ctx.q, chatKey))) notFound('chat_key_not_found');
+      return { chatKey, messages: await listChat(ctx.q, chatKey) };
     },
   },
 });

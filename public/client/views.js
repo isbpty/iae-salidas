@@ -59,6 +59,26 @@ const studentQ = (s) => (s ? [s.name, s.grade, levelName(s.levelId), (s.titulare
 const requestQ = (r) => [studentQ(student(r.studentId)), personQ(r.requestedBy), r.pickupBy ? personQ(r.pickupBy) : null, r.code, r.status, STATUS[r.status], r.kind, r.excusaType, r.reason, r.pickupPoint, r.date, r.time];
 const SEARCH_TABS = ['solicitudes', 'salidas_hoy', 'excusas', 'estudiantes', 'autorizados', 'personal', 'bitacora'];
 function searchHint(count, total) { return UI.q ? '<div class="search-hint">🔎 ' + count + ' de ' + total + ' coinciden con «' + esc(UI.q) + '» <button class="btn tiny" data-action="clearSearch">✕ limpiar</button></div>' : ''; }
+
+/* R3: the Salidas view only carries "hoy + pendientes + últimos 14 días" -- a search that should
+   reach further back calls the `search_requests` command instead. Kept as its own tiny piece of
+   state (not V, which the poll keeps replacing) so a slow reply from an old query never clobbers a
+   newer one, and so typing doesn't spam the server: it's re-run only when the (query, status filter)
+   pair actually changes, same debounce as the local `UI.q` filter. */
+let historySearch = { key: null, status: 'idle', results: [] };
+function ensureHistorySearch(q, status) {
+  const text = q.trim();
+  if (!text) { historySearch = { key: null, status: 'idle', results: [] }; return; }
+  const key = text + '|' + status;
+  if (historySearch.key === key) return;
+  historySearch = { key, status: 'loading', results: [] };
+  api.command('search_requests', { q: text, kind: 'salida', status: status === 'todas' ? undefined : status }).then((r) => {
+    if (historySearch.key === key) { historySearch = { key, status: 'done', results: r.result || [] }; render(); }
+  }).catch((e) => {
+    if (historySearch.key === key) historySearch = { key: null, status: 'idle', results: [] };
+    if (e && e.status === 401) showLogin();
+  });
+}
 /* ---------- Render principal ---------- */
 let pendingTimer = null;
 function render() {
@@ -82,7 +102,11 @@ function render() {
   if (chat) chat.scrollTop = chat.scrollHeight;
   T.screen(currentScreen());
   const now = serverNow();
-  const pend = Object.values(allChats()).flat().filter((m) => m.pendingUntil && m.pendingUntil > now).map((m) => m.pendingUntil);
+  /* R3: admin no longer holds every family's messages (`V.chats` is a summary) -- the "bot is
+     typing…" refresh only needs to watch whichever single conversation is actually on screen. */
+  const showingChat = UI.view === 'whatsapp' || (UI.split && ME.role === 'admin');
+  const chatKey = ME.role === 'parent' ? V.me.id : UI.phoneId;
+  const pend = showingChat ? chatMessages(chatKey).filter((m) => m.pendingUntil && m.pendingUntil > now).map((m) => m.pendingUntil) : [];
   clearTimeout(pendingTimer);
   if (pend.length) pendingTimer = setTimeout(() => { if (!formOpen()) render(); }, Math.min(...pend) - now + 20);
 }
@@ -226,7 +250,11 @@ function viewWhatsapp() {
   }).join('');
   const welcome = !msgs.length ? '<div class="wa-sys">Los mensajes están cifrados de extremo a extremo. Escribe "hola" para empezar.</div>' : '';
   const picker = isParent ? '' : '<div class="sim-bar">📞 Simular teléfono de: <select data-change="setPhone">' +
-    Object.values(V.persons).filter((x) => x.phone).map((x) => opt(x.id, x.name + ' · ' + x.phone + (x.hasAccount ? '' : ' (sin cuenta)'), x.id === key)).join('') +
+    Object.values(V.persons).filter((x) => x.phone).map((x) => {
+      const s = chatSummary(x.id);
+      const unread = s && s.unread ? ' 🔵' + s.unread : '';
+      return opt(x.id, x.name + ' · ' + x.phone + (x.hasAccount ? '' : ' (sin cuenta)') + unread, x.id === key);
+    }).join('') +
     opt('unknown', 'Número desconocido · +507 6000-0000', key === 'unknown') + '</select></div>';
   return '<div class="phone-wrap">' + picker +
     '<div class="phone wa"><div class="wa-header"><span class="wa-back">‹</span><span class="wa-avatar">🏫</span><div><b>' + esc(V.settings.school.short) + ' Salidas</b> <span class="verified">✔</span><div class="small">Cuenta de empresa · en línea</div></div></div>' +
@@ -357,8 +385,16 @@ function schoolRequests(staff) {
   const total = list.length;
   list = list.filter((r) => matchQ(requestQ(r)));
   const filters = ['todas', 'pendiente', 'aprobada', 'retirado', 'rechazada', 'cancelada'];
-  return '<h2>Solicitudes de salida</h2><div class="filters">' + filters.map((x) => '<button class="chip' + (f === x ? ' active' : '') + '" data-action="setFilter" data-f="' + x + '">' + (x === 'todas' ? 'Todas' : STATUS[x]) + '</button>').join('') + '</div>' + searchHint(list.length, total) +
-    (list.length ? list.slice(0, 200).map((r) => schoolReqCard(r, staff)).join('') + (list.length > 200 ? '<div class="empty">Mostrando 200 de ' + list.length + '. Afina la búsqueda.</div>' : '') : '<div class="empty">No hay solicitudes con este filtro.</div>');
+  /* R3: the local list only covers hoy + pendientes + últimos 14 días -- a non-empty search also
+     reaches into the history via `search_requests`, appended below the window's own matches (never
+     duplicating an id already shown). */
+  ensureHistorySearch(UI.q, f);
+  const shownIds = new Set(list.map((r) => r.id));
+  const historic = UI.q.trim() && historySearch.status === 'done' ? historySearch.results.filter((r) => !shownIds.has(r.id)) : [];
+  const historyHint = UI.q.trim() && historySearch.status === 'loading' ? '<div class="search-hint">🔎 buscando en el histórico…</div>' : '';
+  return '<h2>Solicitudes de salida</h2><div class="filters">' + filters.map((x) => '<button class="chip' + (f === x ? ' active' : '') + '" data-action="setFilter" data-f="' + x + '">' + (x === 'todas' ? 'Todas' : STATUS[x]) + '</button>').join('') + '</div>' + searchHint(list.length, total) + historyHint +
+    (list.length ? list.slice(0, 200).map((r) => schoolReqCard(r, staff)).join('') + (list.length > 200 ? '<div class="empty">Mostrando 200 de ' + list.length + '. Afina la búsqueda.</div>' : '') : '<div class="empty">No hay solicitudes con este filtro.</div>') +
+    (historic.length ? '<h3>En el histórico (más de 14 días)</h3>' + historic.map((r) => schoolReqCard(r, staff)).join('') : '');
 }
 function schoolGate(staff) {
   const t = todayISO();

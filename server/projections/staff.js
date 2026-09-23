@@ -1,7 +1,12 @@
-import { listStudents, listPersons, listAuthorizations, listRequests, listNotificationsForStaff, listStaff, listRoutes, listTripsOn, listAudit, listUsers, listAllChats, listConversations } from '../db/repo.js';
+import { listStudents, listPersons, listAuthorizations, listRequests, listNotificationsForStaff, listStaff, listRoutes, listTripsOn, listAudit, listUsers, listChatSummaries, listConversations } from '../db/repo.js';
 import { todayOf, withAuthExpiry } from '../domain/eligibility.js';
 import { withExpired } from '../domain/requests.js';
+import { shiftISO } from '../domain/time.js';
 import { publicPerson } from './parent.js';
+
+/* R3: "hoy + pendientes + últimos 14 días" -- how far back a Recepción/Admin/teacher view reaches
+   before a `search_requests` call is needed for the rest of the history. */
+const REQUEST_WINDOW_DAYS = 14;
 
 const can = (ctx, cap) => ctx.user.role === 'admin' || !!(ctx.permissions[ctx.user.role] || {})[cap];
 
@@ -10,6 +15,7 @@ export async function staffView(ctx) {
   const role = ctx.user.role;
   const everyone = await listStudents(ctx.q);
   const today = todayOf(ctx);
+  const since = shiftISO(ctx.now, ctx.tz, -REQUEST_WINDOW_DAYS);
   let students, requests, authorizations;
   if (role === 'garita') {
     /* Gate sees only today's aprobada/retirado salidas, and only the students, requesters
@@ -23,7 +29,7 @@ export async function staffView(ctx) {
     const ids = students.map((s) => s.id);
     requests = [];
     if (can(ctx, 'ver_solicitudes') || can(ctx, 'ver_excusas')) {
-      requests = await listRequests(ctx.q, { studentIds: ids });
+      requests = await listRequests(ctx.q, { studentIds: ids, since });
       if (!can(ctx, 'ver_solicitudes')) requests = requests.filter((r) => r.kind !== 'salida');
       if (!can(ctx, 'ver_excusas')) requests = requests.filter((r) => r.kind !== 'excusa');
     }
@@ -39,20 +45,24 @@ export async function staffView(ctx) {
     for (const s of students) for (const t of s.titulares) wanted.add(t);
     for (const r of requests) { wanted.add(r.requestedBy); if (r.pickupBy) wanted.add(r.pickupBy); }
     for (const id of wanted) if (byId[id]) persons[id] = publicPerson(byId[id]);
-  } else if (can(ctx, 'todos_niveles')) {
-    for (const p of all) persons[p.id] = publicPerson(p);
   } else {
+    /* R3: used to be "every person in the school" for `todos_niveles` roles (admin/recepción) --
+       cédula and phone for a family that has nothing to do with what's on screen. Scoped to who the
+       visible students/authorizations/requests actually reference, same as the other roles, plus
+       (todos_niveles only) account holders with a phone so the WhatsApp phone picker still lists
+       everyone it could simulate, not just the families this page happens to reference. */
     const wanted = new Set();
     for (const s of students) for (const t of s.titulares) wanted.add(t);
     for (const a of authorizations) { wanted.add(a.personId); if (a.createdBy) wanted.add(a.createdBy); }
     for (const r of requests) { wanted.add(r.requestedBy); if (r.pickupBy) wanted.add(r.pickupBy); }
+    if (can(ctx, 'todos_niveles')) for (const p of all) if (p.hasAccount && p.phone) wanted.add(p.id);
     for (const id of wanted) if (byId[id]) persons[id] = publicPerson(byId[id]);
   }
   const allRoutes = await listRoutes(ctx.q);
   const routes = can(ctx, 'ver_rutas') ? (me.routeId ? allRoutes.filter((r) => r.id === me.routeId) : allRoutes) : [];
   const routeIds = new Set(routes.map((r) => r.id));
   const trips = (await listTripsOn(ctx.q, today)).filter((t) => routeIds.has(t.routeId));
-  const notifications = await listNotificationsForStaff(ctx.q, role, me.id, ctx.user.id);
+  const notifications = await listNotificationsForStaff(ctx.q, role, me.id, ctx.user.id, { limit: 100 });
   const staff = await listStaff(ctx.q);
   return {
     me,
@@ -69,7 +79,7 @@ export async function staffView(ctx) {
     audit: can(ctx, 'bitacora') ? await listAudit(ctx.q, 500) : null,
     permissions: role === 'admin' ? ctx.permissions : null,
     users: role === 'admin' ? (await listUsers(ctx.q)).map(({ id, name, role: r, kind, refId }) => ({ id, name, role: r, kind, refId })) : null,
-    chats: role === 'admin' ? await listAllChats(ctx.q) : null,
+    chats: role === 'admin' ? await listChatSummaries(ctx.q) : null,
     chatStates: role === 'admin' ? await listConversations(ctx.q) : null,
     unread: notifications.filter((n) => !n.read).length,
   };

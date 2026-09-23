@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeTestApp, call, loginAs } from '../test-helpers.js';
+import { insertRow, insertNotification } from '../db/repo.js';
 
 test('parent sees only the family, never a directory of account holders', async () => {
   const t = await makeTestApp();
@@ -78,8 +79,76 @@ test('teacher sees her grade, gate sees today approved salidas, monitor sees her
   const admin = await t.view('u_s1');
   assert.ok(admin.users.length >= 13);
   assert.equal(admin.permissions.garita.marcar_salida, true);
-  assert.ok(Array.isArray(admin.chats.p1));
+  assert.ok(!Array.isArray(admin.chats.p1), 'R3: a summary per chat_key, not the full transcript');
+  assert.equal(admin.chats.p1.count, 1);
+  assert.equal(typeof admin.chats.p1.lastText, 'string');
+  assert.equal(typeof admin.chats.p1.lastAt, 'number');
   assert.equal(admin.capabilities.config, true);
+  await t.close();
+});
+
+test('R3: staff/parent views only carry hoy + pendientes + últimos 14 días; search_requests reaches further', async () => {
+  const t = await makeTestApp();
+  await t.db.tx((q) => insertRow(q, 'requests', {
+    id: 'r_old', kind: 'salida', studentId: 'e1', requestedBy: 'p1', pickupBy: 'p1', pickupKind: 'titular',
+    date: '2026-08-01', time: '10:00', reason: 'Trámite de pasaporte', channel: 'web', status: 'aprobada', code: '1234',
+    createdAt: new Date('2026-08-01T14:00:00Z'),
+  }));
+  await t.db.tx((q) => insertRow(q, 'requests', {
+    id: 'r_old_pend', kind: 'salida', studentId: 'e1', requestedBy: 'p1',
+    date: '2026-08-01', time: '10:00', reason: 'Trámite viejo', channel: 'web', status: 'pendiente',
+    createdAt: new Date('2026-08-01T14:05:00Z'),
+  }));
+  const rec = await t.view('u_s2');
+  assert.ok(!rec.requests.some((r) => r.id === 'r_old'), 'more than 14 days old and not pendiente: outside the window');
+  assert.ok(rec.requests.some((r) => r.id === 'r_old_pend'), 'pendiente stays visible regardless of its date');
+  const parent = await t.view('u_p1');
+  assert.ok(!parent.requests.some((r) => r.id === 'r_old'), 'the parent view carries the same window');
+  assert.ok(parent.requests.some((r) => r.id === 'r_old_pend'));
+
+  const { result } = await t.run('search_requests', 'u_s2', { q: 'Joseph' });
+  assert.ok(result.some((r) => r.id === 'r_old'), 'the search box reaches history the trimmed view no longer carries');
+  assert.ok(result.length <= 200);
+  await assert.rejects(t.run('search_requests', 'u_s6', { q: 'a' }), /forbidden_capability/, 'garita has no ver_solicitudes');
+  await t.close();
+});
+
+test('R3: avisos -- solo los últimos 100', async () => {
+  const t = await makeTestApp();
+  await t.db.tx(async (q) => {
+    for (let i = 0; i < 150; i++) await insertNotification(q, { id: 'n_bulk_' + i, role: 'recepcion', text: 'synthetic ' + i, kind: 'info' }, new Date(t.clock.now.getTime() + (i + 1) * 1000));
+  });
+  const rec = await t.view('u_s2');
+  const synthetic = rec.notifications.filter((n) => n.text.startsWith('synthetic '));
+  assert.equal(rec.notifications.length, 100);
+  assert.equal(synthetic.length, 100, 'the newest 100 crowd out everything else, including the seeded ones');
+  assert.ok(synthetic.some((n) => n.text === 'synthetic 149'));
+  assert.ok(!synthetic.some((n) => n.text === 'synthetic 0'));
+  await t.close();
+});
+
+test('R3: admin chats are a summary map; the full transcript loads on demand via get_chat', async () => {
+  const t = await makeTestApp();
+  await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '13:00', pickupBy: 'p1', reason: 'x' });
+  const { result } = await t.run('get_chat', 'u_s1', { chatKey: 'p1' });
+  assert.equal(result.chatKey, 'p1');
+  assert.ok(Array.isArray(result.messages) && result.messages.length >= 1);
+  await assert.rejects(t.run('get_chat', 'u_s2', {}), /forbidden_role/, 'admin only');
+  await assert.rejects(t.run('get_chat', 'u_s1', {}), /chat_key_required/);
+  await assert.rejects(t.run('get_chat', 'u_s1', { chatKey: 'no_such_person' }), /chat_key_not_found/);
+  const t2 = await makeTestApp({ config: { demoMode: false } });
+  await assert.rejects(t2.run('get_chat', 'u_s1', { chatKey: 'p1' }), /demo_only/, 'reading a real family\'s WhatsApp history is demo-only, like whatsapp_inbound');
+  await t2.close();
+  await t.close();
+});
+
+test('R3: admin persons stay scoped to what is on screen, plus account holders with a phone for the WhatsApp picker', async () => {
+  const t = await makeTestApp();
+  await t.db.tx((q) => insertRow(q, 'persons', { id: 'p_ghost', name: 'Nadie Referenciado', phone: '+507 6000-1111', cedula: '8-999-000', relation: 'Otro', hasAccount: false }));
+  await t.db.tx((q) => insertRow(q, 'persons', { id: 'p_acct', name: 'Cuenta Suelta', phone: '+507 6000-2222', cedula: '8-999-001', relation: 'Otro', hasAccount: true }));
+  const admin = await t.view('u_s1');
+  assert.ok(!('p_ghost' in admin.persons), 'unreferenced and without an account: no longer dumped into every admin view');
+  assert.ok('p_acct' in admin.persons, 'account holder with a phone: still listed so the WhatsApp phone picker can simulate them');
   await t.close();
 });
 

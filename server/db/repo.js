@@ -99,16 +99,47 @@ export const insertRequest = (q, r) => insertRow(q, 'requests', r);
 export async function getRequest(q, id) { return (await hydrateRequests(q, await q.query('SELECT * FROM requests WHERE id=$1', [id])))[0] || null; }
 /* `hydrate: false` skips the history/confirmation batch (2 extra queries) for callers that only
    need `code`/`status`/`date`/etc -- `uniqueCode` and the duplicate/rejected checks in
-   `autoapprove.js` (R2) -- and never touch `.history`/`.confirmation` on the result. */
-export async function listRequests(q, { studentIds, date, kind, status, hydrate = true } = {}) {
+   `autoapprove.js` (R2) -- and never touch `.history`/`.confirmation` on the result.
+   `since` (R3) trims the Recepción/Admin/padre views to "hoy + pendientes + últimos 14 días":
+   any `pendiente` request stays visible regardless of its date (it still needs action), everything
+   else must have `date >= since`. Older history beyond that window is reached through
+   `searchRequests` instead of being loaded into every view. */
+export async function listRequests(q, { studentIds, date, kind, status, since, hydrate = true } = {}) {
   const where = [], params = [];
   if (studentIds) { if (!studentIds.length) return []; where.push(`student_id IN (${marks(studentIds.length, params.length + 1)})`); params.push(...studentIds); }
   if (date) { params.push(date); where.push(`date=$${params.length}`); }
   if (kind) { params.push(kind); where.push(`kind=$${params.length}`); }
   if (status) { params.push(status); where.push(`status=$${params.length}`); }
+  if (since) { params.push(since); where.push(`(date >= $${params.length} OR status='pendiente')`); }
   const sql = 'SELECT * FROM requests' + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY created_at DESC, id DESC';
   const rows = await q.query(sql, params);
   return hydrate ? hydrateRequests(q, rows) : all(rows);
+}
+/* The historical counterpart of `listRequests`: a free-text `search_requests` command reaches past
+   the 14-day window on demand instead of every view paying for the whole table. `text` matches the
+   student's name, the requester's/pickup person's name/cédula/phone, or the salida `code` --
+   whatever a receptionist would actually type into the search box. Capped at `limit` (the command
+   enforces 200) so a broad query can never return the whole history either. */
+export async function searchRequests(q, { studentIds, text, from, to, status, kind, limit = 200 } = {}) {
+  const where = [], params = [];
+  if (studentIds) { if (!studentIds.length) return []; where.push(`r.student_id IN (${marks(studentIds.length, params.length + 1)})`); params.push(...studentIds); }
+  if (from) { params.push(from); where.push(`r.date >= $${params.length}`); }
+  if (to) { params.push(to); where.push(`r.date <= $${params.length}`); }
+  if (kind) { params.push(kind); where.push(`r.kind=$${params.length}`); }
+  if (status) { params.push(status); where.push(`r.status=$${params.length}`); }
+  if (text) {
+    params.push('%' + text + '%');
+    const p = params.length;
+    where.push(`(s.name ILIKE $${p} OR rp.name ILIKE $${p} OR pk.name ILIKE $${p} OR rp.cedula ILIKE $${p} OR pk.cedula ILIKE $${p} OR rp.phone ILIKE $${p} OR pk.phone ILIKE $${p} OR r.code ILIKE $${p})`);
+  }
+  params.push(Math.max(1, Math.min(200, limit || 200)));
+  const sql = `SELECT r.* FROM requests r
+    JOIN students s ON s.id = r.student_id
+    LEFT JOIN persons rp ON rp.id = r.requested_by
+    LEFT JOIN persons pk ON pk.id = r.pickup_by
+    ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+    ORDER BY r.created_at DESC, r.id DESC LIMIT $${params.length}`;
+  return hydrateRequests(q, await q.query(sql, params));
 }
 export const addRequestEvent = (q, requestId, at, text) => insertRow(q, 'request_events', { requestId, at, text });
 export async function upsertConfirmation(q, row) {
@@ -135,9 +166,14 @@ function targetWhere(target, params) {
   if (target.staffId) { params.push(target.staffId); return `staff_id=$${params.length}`; }
   params.push(target.role); return `role=$${params.length}`;
 }
-export async function listNotifications(q, target) {
+/* `limit` (R3, "avisos: últimos 100") caps the notices a view carries. The cap must keep the most
+   recent ones, so it orders `DESC ... LIMIT` first and re-sorts ascending in an outer query --
+   `unread`/toast logic downstream (state.js) still expects oldest-first. */
+export async function listNotifications(q, target, { limit } = {}) {
   const params = []; const w = targetWhere(target, params);
-  return all(await q.query(`SELECT * FROM notifications WHERE ${w} ORDER BY created_at, seq`, params)).map((n) => ({ ...n, ts: n.createdAt, read: !!n.readAt }));
+  let sql = `SELECT * FROM notifications WHERE ${w} ORDER BY seq`;
+  if (limit) { params.push(limit); sql = `SELECT * FROM (SELECT * FROM notifications WHERE ${w} ORDER BY seq DESC LIMIT $${params.length}) sub ORDER BY seq`; }
+  return all(await q.query(sql, params)).map((n) => ({ ...n, ts: n.createdAt, read: !!n.readAt }));
 }
 /* Personal notices (`personId`/`staffId` target) are only ever seen by one user, so "read" is still
    the shared `read_at` column. Role notices are shared by everyone in the role (L10): marking one
@@ -159,13 +195,14 @@ export async function markNotificationsRead(q, target, at, userId) {
    `listNotifications` calls before. One `role=$1 OR staff_id=$2` query returns the same rows.
    `userId` (the caller's `users.id`) is joined against `notification_reads` to compute `read` for
    role notices per user (L10); staff-targeted notices keep using their own `read_at`. */
-export async function listNotificationsForStaff(q, role, staffId, userId) {
-  const rows = await q.query(
-    `SELECT n.*, nr.read_at AS role_read_at FROM notifications n
+export async function listNotificationsForStaff(q, role, staffId, userId, { limit } = {}) {
+  const base = `SELECT n.*, nr.read_at AS role_read_at FROM notifications n
      LEFT JOIN notification_reads nr ON nr.notification_id = n.id AND nr.user_id = $3
-     WHERE n.role=$1 OR n.staff_id=$2 ORDER BY n.created_at, n.seq`,
-    [role, staffId, userId]);
-  return all(rows).map((n) => ({ ...n, ts: n.createdAt, read: n.role ? !!n.roleReadAt : !!n.readAt }));
+     WHERE n.role=$1 OR n.staff_id=$2`;
+  const params = [role, staffId, userId];
+  let sql = base + ' ORDER BY n.seq';
+  if (limit) { params.push(limit); sql = `SELECT * FROM (${base} ORDER BY n.seq DESC LIMIT $${params.length}) sub ORDER BY seq`; }
+  return all(await q.query(sql, params)).map((n) => ({ ...n, ts: n.createdAt, read: n.role ? !!n.roleReadAt : !!n.readAt }));
 }
 
 /* ---------- chat & conversation ---------- */
@@ -175,6 +212,29 @@ export const listChat = async (q, chatKey) => all(await q.query('SELECT * FROM c
 export async function listAllChats(q) {
   const out = {};
   for (const m of all(await q.query('SELECT * FROM chat_messages ORDER BY id'))) (out[m.chatKey] ||= []).push(chatRow(m));
+  return out;
+}
+/* R3: the admin view used to embed every WhatsApp message of every family (`listAllChats`) just so
+   the sidebar could show a last-message preview -- with months of use that is the single biggest
+   contributor to view size. A summary per `chat_key` (count, last message, and "unread" = messages
+   received since the school's last reply) is enough for the chat list; the full transcript for
+   whichever phone is selected loads on demand through `get_chat`/`listChat`. Three small aggregate
+   queries (none scanning per-chat in JS) instead of one that returns every row. */
+export async function listChatSummaries(q) {
+  const counts = all(await q.query('SELECT chat_key, count(*)::int AS c FROM chat_messages GROUP BY chat_key'));
+  if (!counts.length) return {};
+  const last = all(await q.query('SELECT DISTINCT ON (chat_key) chat_key, text, created_at FROM chat_messages ORDER BY chat_key, id DESC'));
+  const unread = all(await q.query(
+    `SELECT chat_key, count(*)::int AS c FROM chat_messages m WHERE direction='in' AND created_at >
+       COALESCE((SELECT max(o.created_at) FROM chat_messages o WHERE o.chat_key = m.chat_key AND o.direction='out'), '-infinity')
+     GROUP BY chat_key`));
+  const lastByKey = Object.fromEntries(last.map((r) => [r.chatKey, r]));
+  const unreadByKey = Object.fromEntries(unread.map((r) => [r.chatKey, r.c]));
+  const out = {};
+  for (const r of counts) {
+    const l = lastByKey[r.chatKey] || {};
+    out[r.chatKey] = { count: r.c, lastText: l.text || null, lastAt: l.createdAt ? new Date(l.createdAt).getTime() : null, unread: unreadByKey[r.chatKey] || 0 };
+  }
   return out;
 }
 export async function countPendingOut(q, chatKey, at) {

@@ -54,7 +54,31 @@ function busPosition(r, leg, progress) {
   const total = minutesOf(r.schedule[leg].end) - minutesOf(r.schedule[leg].start);
   return { lat: a.lat + (b.lat - a.lat) * f, lng: a.lng + (b.lng - a.lng) * f, prevStop: a, nextStop: b, index: i, frac: f, stops, minutesLeft: Math.round((1 - progress) * total) };
 }
-function chatMessages(key) { return ME.role === 'parent' ? (V.chat || []) : ((V.chats || {})[key] || []); }
+/* R3: `V.chats` is now a summary per chat_key (last message, count, unread), not every family's full
+   transcript -- the admin/recepción view stopped carrying that (see server/db/repo.js
+   listChatSummaries). The full messages for whichever phone the simulator has selected load on
+   demand through the `get_chat` command and are cached here, keyed by the view's own revision so a
+   real change (a new incoming/outgoing message) invalidates the cache and a stale one does not
+   re-fetch on every render. */
+const chatCache = {};
+function chatSummary(key) { return (V.chats || {})[key] || null; }
+function ensureChatLoaded(key) {
+  if (ME.role === 'parent' || !key || key === 'unknown') return;
+  const cached = chatCache[key];
+  if (cached && (cached.loading || cached.rev === REV)) return;
+  chatCache[key] = { rev: cached ? cached.rev : -1, messages: cached ? cached.messages : [], loading: true };
+  api.command('get_chat', { chatKey: key }).then((r) => {
+    chatCache[key] = { rev: REV, messages: (r.result && r.result.messages) || [], loading: false };
+    if (UI.phoneId === key) render();
+  }).catch((e) => {
+    chatCache[key] = { rev: REV, messages: (cached && cached.messages) || [], loading: false };
+    if (e && e.status === 401) showLogin();
+  });
+}
+function chatMessages(key) {
+  if (ME.role === 'parent') return V.chat || [];
+  ensureChatLoaded(key);
+  return (chatCache[key] && chatCache[key].messages) || [];
+}
 function chatStateFor(key) { return ME.role === 'parent' ? V.chatState : ((V.chatStates || {})[key] || null); }
-function allChats() { return ME.role === 'parent' ? { me: V.chat || [] } : (V.chats || {}); }
 function describePickup(r) { const pk = person(r.pickupBy); if (!pk) return ''; return pk.name + (r.pickupBy === r.requestedBy ? ' (solicitante)' : ' (' + pk.relation + ')'); }
