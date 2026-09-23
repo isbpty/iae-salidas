@@ -1,14 +1,15 @@
-import { listStudents, listPersons, listAuthorizations, listRequests, listNotificationsForStaff, listStaff, listRoutes, listTripsOn, listAudit, listUsers, listChatSummaries, listConversations } from '../db/repo.js';
+import { listStudents, listPersons, listAuthorizations, listRequests, listNotificationsForStaff, countUnreadNotifications, listStaff, listRoutes, listTripsOn, listAudit, listUsers, listChatSummaries, listConversations } from '../db/repo.js';
 import { todayOf, withAuthExpiry } from '../domain/eligibility.js';
 import { withExpired } from '../domain/requests.js';
 import { shiftISO } from '../domain/time.js';
 import { publicPerson } from './parent.js';
+import { can } from '../commands/guards.js';
 
 /* R3: "hoy + pendientes + últimos 14 días" -- how far back a Recepción/Admin/teacher view reaches
    before a `search_requests` call is needed for the rest of the history. */
 const REQUEST_WINDOW_DAYS = 14;
-
-const can = (ctx, cap) => ctx.user.role === 'admin' || !!(ctx.permissions[ctx.user.role] || {})[cap];
+/* R3: "avisos: últimos 100". */
+const NOTIFICATION_LIMIT = 100;
 
 export async function staffView(ctx) {
   const me = ctx.staff;
@@ -62,7 +63,10 @@ export async function staffView(ctx) {
   const routes = can(ctx, 'ver_rutas') ? (me.routeId ? allRoutes.filter((r) => r.id === me.routeId) : allRoutes) : [];
   const routeIds = new Set(routes.map((r) => r.id));
   const trips = (await listTripsOn(ctx.q, today)).filter((t) => routeIds.has(t.routeId));
-  const notifications = await listNotificationsForStaff(ctx.q, role, me.id, ctx.user.id, { limit: 100 });
+  const notifications = await listNotificationsForStaff(ctx.q, role, me.id, ctx.user.id, { limit: NOTIFICATION_LIMIT });
+  /* The list is capped at 100; below the cap it holds every notice, so counting it is exact and saves
+     a query. At the cap, `unread` comes from a COUNT over all of them (not just the newest 100). */
+  const unread = notifications.length < NOTIFICATION_LIMIT ? notifications.filter((n) => !n.read).length : await countUnreadNotifications(ctx.q, { role, staffId: me.id, userId: ctx.user.id });
   const staff = await listStaff(ctx.q);
   return {
     me,
@@ -81,6 +85,6 @@ export async function staffView(ctx) {
     users: role === 'admin' ? (await listUsers(ctx.q)).map(({ id, name, role: r, kind, refId }) => ({ id, name, role: r, kind, refId })) : null,
     chats: role === 'admin' ? await listChatSummaries(ctx.q) : null,
     chatStates: role === 'admin' ? await listConversations(ctx.q) : null,
-    unread: notifications.filter((n) => !n.read).length,
+    unread,
   };
 }

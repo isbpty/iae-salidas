@@ -1,4 +1,4 @@
-import { listPersons, listAuthorizations, listRequests, listNotifications, listChat, getConversation, listRoutes, listTripsOn, listStaff } from '../db/repo.js';
+import { listPersons, listAuthorizations, listRequests, listNotifications, countUnreadNotifications, listChat, getConversation, listRoutes, listTripsOn, listStaff } from '../db/repo.js';
 import { studentsOf, authorizedFor, todayOf, withAuthExpiry } from '../domain/eligibility.js';
 import { withExpired } from '../domain/requests.js';
 import { shiftISO } from '../domain/time.js';
@@ -7,6 +7,8 @@ import { shiftISO } from '../domain/time.js';
    history is smaller, but a family that has used the app for years still doesn't need every salida
    ever requested loaded on every poll. */
 const REQUEST_WINDOW_DAYS = 14;
+/* R3: "avisos: últimos 100". */
+const NOTIFICATION_LIMIT = 100;
 
 export const publicPerson = ({ id, name, phone, cedula, relation, hasAccount, docName, docAttachmentId }) => ({ id, name, phone, cedula, relation, hasAccount, docName, docAttachmentId });
 /* What a parent may know about somebody outside their own family: enough to name them in a list,
@@ -41,7 +43,10 @@ export async function parentView(ctx) {
   const routeIds = new Set(students.map((s) => s.routeId).filter(Boolean));
   const routes = (await listRoutes(ctx.q)).filter((r) => routeIds.has(r.id));
   const trips = (await listTripsOn(ctx.q, todayOf(ctx))).filter((t) => routeIds.has(t.routeId));
-  const notifications = await listNotifications(ctx.q, { personId: me.id }, { limit: 100 });
+  const notifications = await listNotifications(ctx.q, { personId: me.id }, { limit: NOTIFICATION_LIMIT });
+  /* The list is capped at 100; below the cap it holds every notice, so counting it is exact and saves
+     a query. At the cap, `unread` comes from a COUNT over all of them (not just the newest 100). */
+  const unread = notifications.length < NOTIFICATION_LIMIT ? notifications.filter((n) => !n.read).length : await countUnreadNotifications(ctx.q, { personId: me.id });
   return {
     me: publicPerson(me),
     students,
@@ -56,6 +61,6 @@ export async function parentView(ctx) {
     trips,
     gpsNow: Object.fromEntries(routes.map((r) => [r.id, ctx.gps.position(r, ctx)])),
     staffNames: Object.fromEntries((await listStaff(ctx.q)).map((s) => [s.id, s.name])),
-    unread: notifications.filter((n) => !n.read).length,
+    unread,
   };
 }

@@ -128,6 +128,32 @@ test('R3: avisos -- solo los últimos 100', async () => {
   await t.close();
 });
 
+test('unread cuenta todos los avisos sin leer, no solo los 100 que trae la vista', async () => {
+  const t = await makeTestApp();
+  await insertRow(t.db, 'staff', { id: 's9', name: 'Marta Solís', role: 'recepcion', title: 'Recepción' });
+  await insertRow(t.db, 'users', { id: 'u_s9', kind: 'staff', refId: 's9', name: 'Marta Solís', role: 'recepcion' });
+  await t.run('mark_notifications_read', 'u_s2', {});
+  await t.run('mark_notifications_read', 'u_p1', {});
+  await t.db.tx(async (q) => {
+    for (let i = 0; i < 120; i++) await insertNotification(q, { id: 'n_role_' + i, role: 'recepcion', text: 'rol ' + i, kind: 'info' }, new Date(t.clock.now.getTime() + (i + 1) * 1000));
+    for (let i = 0; i < 130; i++) await insertNotification(q, { id: 'n_p1_' + i, personId: 'p1', text: 'padre ' + i, kind: 'info' }, new Date(t.clock.now.getTime() + (i + 1) * 1000));
+  });
+  const rec = await t.view('u_s2');
+  assert.equal(rec.notifications.length, 100);
+  assert.equal(rec.unread, 120, 'role notices beyond the 100-row cap still count as unread');
+  const other = await t.view('u_s9');
+  assert.ok(other.unread >= 120, 'another Recepción user has not read them either (per-user reads, L10)');
+  const parent = await t.view('u_p1');
+  assert.equal(parent.notifications.length, 100);
+  assert.equal(parent.unread, 130);
+  await t.run('mark_notifications_read', 'u_s2', {});
+  await t.run('mark_notifications_read', 'u_p1', {});
+  assert.equal((await t.view('u_s2')).unread, 0);
+  assert.equal((await t.view('u_p1')).unread, 0);
+  assert.ok((await t.view('u_s9')).unread >= 120, "u_s2 reading them does not silence u_s9's count");
+  await t.close();
+});
+
 test('R3: admin chats are a summary map; the full transcript loads on demand via get_chat', async () => {
   const t = await makeTestApp();
   await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '13:00', pickupBy: 'p1', reason: 'x' });

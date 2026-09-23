@@ -425,10 +425,16 @@ function schoolGate(staff) {
       '<div class="small">📍 ' + esc(r.pickupPoint) + ' · código <b class="mono">' + r.code + '</b>' + (conf ? ' · confirmación: <b>' + conf + '</b>' : '') + (r.status === 'retirado' ? ' · <b>salió ' + fmtClock(r.exitAt) + '</b>' : '') + '</div>' +
       '<div class="actions">' + act + '</div></div></div>';
   };
-  return '<h2>Garita · salidas de hoy <span class="muted small">' + new Date().toLocaleDateString('es-PA', { weekday: 'long', day: 'numeric', month: 'long' }) + '</span> <span class="right"><button class="btn small" data-action="setView" data-view="tv" title="Pantalla grande para el monitor de la puerta">📺 Pantalla de garita</button> <button class="btn small primary" data-action="openModal" data-modal="scan">📷 Escanear QR / código</button></span></h2>' + searchHint(shown.length, list.length) + '<h3>Por retirar (' + pend.length + ')</h3>' + (pend.length ? pend.map(card).join('') : '<div class="empty">No hay salidas aprobadas pendientes.</div>') +
+  return '<h2>Garita · salidas de hoy <span class="muted small">' + schoolDateLong() + '</span> <span class="right"><button class="btn small" data-action="setView" data-view="tv" title="Pantalla grande para el monitor de la puerta">📺 Pantalla de garita</button> <button class="btn small primary" data-action="openModal" data-modal="scan">📷 Escanear QR / código</button></span></h2>' + searchHint(shown.length, list.length) + '<h3>Por retirar (' + pend.length + ')</h3>' + (pend.length ? pend.map(card).join('') : '<div class="empty">No hay salidas aprobadas pendientes.</div>') +
     '<h3>Retirados (' + done.length + ')</h3>' + (done.length ? done.map(card).join('') : '<div class="empty">Nadie ha salido todavía.</div>');
 }
 /* Modo pantalla: para un monitor en la garita. Tarjetas grandes, foto del autorizado, reloj; se actualiza solo. */
+/* "Viernes, 18 de septiembre" en la zona de la escuela y con el reloj del servidor (L16), no el del
+   navegador -- lo usan el encabezado de la garita y la TV. */
+function schoolDateLong() {
+  const f = new Date(serverNow()).toLocaleDateString('es-PA', { weekday: 'long', day: 'numeric', month: 'long', timeZone: schoolTZ() });
+  return f.charAt(0).toUpperCase() + f.slice(1);
+}
 function viewTv() {
   const t = todayISO();
   const list = V.requests.filter((r) => r.kind === 'salida' && r.date === t && ['aprobada', 'retirado'].includes(r.status)).sort((a, b) => a.time.localeCompare(b.time));
@@ -442,8 +448,7 @@ function viewTv() {
       '<div class="tv-pick">Retira <b>' + esc(pk.name) + '</b> · ' + esc(pk.relation || '') + ' · céd. <span class="mono">' + esc(pk.cedula || '') + '</span> ' + kindBadge(r.pickupKind) + '</div>' +
       '<div class="tv-meta">📍 ' + esc(r.pickupPoint) + ' · código <b class="mono">' + r.code + '</b>' + (conf ? ' · confirmación: <b>' + conf + '</b>' : r.pickupKind === 'una_vez' ? ' · <span class="danger-text">requiere confirmación del titular</span>' : '') + '</div></div></div>';
   };
-  const d = new Date(serverNow());
-  return '<div class="tv"><header class="tv-head"><div><div class="tv-title">🛂 Garita · ' + esc(V.settings.school.name) + '</div><div class="tv-date">' + (function () { const f = d.toLocaleDateString('es-PA', { weekday: 'long', day: 'numeric', month: 'long', timeZone: schoolTZ() }); return f.charAt(0).toUpperCase() + f.slice(1); })() + '</div></div>' +
+  return '<div class="tv"><header class="tv-head"><div><div class="tv-title">🛂 Garita · ' + esc(V.settings.school.name) + '</div><div class="tv-date">' + schoolDateLong() + '</div></div>' +
     '<div class="tv-clock" id="tvClock">' + nowHHMM() + '</div><button class="btn" data-action="setView" data-view="school">✕ Salir (Esc)</button></header>' +
     '<section><h2>Por retirar <span class="tv-count">' + pend.length + '</span></h2>' + (pend.length ? '<div class="tv-grid">' + pend.map(card).join('') + '</div>' : '<div class="tv-empty">Sin salidas pendientes ✅</div>') + '</section>' +
     (done.length ? '<section class="tv-done"><h2>Retirados hoy <span class="tv-count">' + done.length + '</span></h2><div class="tv-list">' + done.slice(0, 8).map((r) => { const st = student(r.studentId); const pk = person(r.pickupBy) || {}; return '<div>' + fmtClock(r.exitAt) + ' · <b>' + esc(st.name) + '</b> · ' + esc(pk.name) + '</div>'; }).join('') + '</div></section>' : '') + '</div>';

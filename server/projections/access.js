@@ -6,7 +6,7 @@ import { todayISO } from '../domain/time.js';
    adjunto cuyo dueño retirase hoy (incluidos certificados médicos). Ahora se comprueba por entidad: garita
    solo la cédula/foto que es el documento de identidad de quien retira hoy; los padres solo la excusa de
    su propio hijo o el documento de alguien que ellos mismos autorizaron. Consultas EXISTS de una sola
-   ida (mismo estilo que `existsApprovedPickupToday`/`existsExcusaForTeacher`), sin tocar repo.js. */
+   ida (mismo estilo que `existsExcusaForTeacher`), sin tocar repo.js. */
 export async function canSeeAttachment(q, user, att, env) {
   if (user.role === 'admin' || user.role === 'recepcion') return true;
   if (user.kind === 'person') {

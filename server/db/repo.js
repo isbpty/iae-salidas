@@ -219,16 +219,28 @@ export async function listNotificationsForStaff(q, role, staffId, userId, { limi
   return all(await q.query(sql, params)).map((n) => ({ ...n, ts: n.createdAt, read: n.role ? !!n.roleReadAt : !!n.readAt }));
 }
 
+/* `unread` must count every unread notice of the user, not just the ones that survived the 100-row
+   `limit` of the view (Task 7). Personal notices (`person_id`/`staff_id`) are unread while their own
+   `read_at` is NULL; role notices are unread for this user while they have no `notification_reads`
+   row for `userId` (L10) -- the same rule, and the same `role=$1 OR staff_id=$2` scope, as
+   `listNotificationsForStaff`. `role`/`staffId`/`userId` are all needed for a staff user; a parent
+   only passes `personId`. */
+export async function countUnreadNotifications(q, { personId, role, staffId, userId }) {
+  if (personId) return one(await q.query('SELECT count(*)::int AS c FROM notifications WHERE person_id=$1 AND read_at IS NULL', [personId])).c;
+  return one(await q.query(
+    `SELECT count(*)::int AS c FROM notifications n
+       WHERE (n.role=$1 OR n.staff_id=$2)
+         AND CASE WHEN n.role IS NOT NULL
+                  THEN NOT EXISTS (SELECT 1 FROM notification_reads nr WHERE nr.notification_id = n.id AND nr.user_id = $3)
+                  ELSE n.read_at IS NULL END`,
+    [role, staffId, userId])).c;
+}
+
 /* ---------- chat & conversation ---------- */
 const chatRow = (m) => ({ id: m.id, from: m.direction === 'in' ? 'user' : 'bot', text: m.text, buttons: m.buttons, location: m.location, ts: m.createdAt, pendingUntil: m.pendingUntil });
 export const insertChat = (q, m, at) => insertRow(q, 'chat_messages', { ...m, createdAt: at });
 export const listChat = async (q, chatKey) => all(await q.query('SELECT * FROM chat_messages WHERE chat_key=$1 ORDER BY id', [chatKey])).map(chatRow);
-export async function listAllChats(q) {
-  const out = {};
-  for (const m of all(await q.query('SELECT * FROM chat_messages ORDER BY id'))) (out[m.chatKey] ||= []).push(chatRow(m));
-  return out;
-}
-/* R3: the admin view used to embed every WhatsApp message of every family (`listAllChats`) just so
+/* R3: the admin view used to embed every WhatsApp message of every family (the old `listAllChats`) just so
    the sidebar could show a last-message preview -- with months of use that is the single biggest
    contributor to view size. A summary per `chat_key` (count, last message, and "unread" = messages
    received since the school's last reply) is enough for the chat list; the full transcript for
@@ -340,10 +352,6 @@ export const getAttachment = async (q, id) => one(await q.query('SELECT * FROM a
 /* `canSeeAttachment` used to re-run `listRequests` (hydrated, with history/confirmations) for the
    whole day or the whole school just to `.some`/`.filter` one boolean out of it -- once per image
    the gate/teacher screen shows (R2). These answer the same question with a single `EXISTS`. */
-export async function existsApprovedPickupToday(q, date, pickupBy) {
-  const r = await q.query("SELECT 1 FROM requests WHERE date=$1 AND kind='salida' AND status IN ('aprobada','retirado') AND pickup_by=$2 LIMIT 1", [date, pickupBy]);
-  return r.length > 0;
-}
 export async function existsExcusaForTeacher(q, attachmentId, grades) {
   if (!grades || !grades.length) return false;
   const r = await q.query("SELECT 1 FROM requests r JOIN students s ON s.id = r.student_id WHERE r.kind='excusa' AND r.attachment_id=$1 AND s.grade = ANY($2) LIMIT 1", [attachmentId, grades]);

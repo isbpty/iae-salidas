@@ -1,13 +1,11 @@
 import { register } from './index.js';
-import { requireCap, requireTitular, STAFF_ROLES } from './guards.js';
+import { requireCap, requireTitular, can, STAFF_ROLES } from './guards.js';
 import { createRequest, approveRequest, rejectRequest, acceptExcusa, cancelRequest, staffCancelRequest, withExpired } from '../domain/requests.js';
 import { todayOf } from '../domain/eligibility.js';
 import { isValidDate } from '../domain/time.js';
 import { getRequest, getAttachment, listStudents, searchRequests } from '../db/repo.js';
 import { deny, notFound, badRequest, conflict } from '../domain/errors.js';
-import { REQUEST_STATUSES } from '../domain/constants.js';
-
-const can = (ctx, cap) => ctx.user.role === 'admin' || !!(ctx.permissions[ctx.user.role] || {})[cap];
+import { REQUEST_STATUSES, REQUEST_KINDS } from '../domain/constants.js';
 
 async function ownRequest(ctx, requestId) {
   const r = await getRequest(ctx.q, requestId);
@@ -97,7 +95,7 @@ register({
       const from = isValidDate(input.from) ? input.from : null;
       const to = isValidDate(input.to) ? input.to : null;
       const status = REQUEST_STATUSES.includes(input.status) ? input.status : null;
-      const kind = ['salida', 'excusa'].includes(input.kind) ? input.kind : null;
+      const kind = REQUEST_KINDS.includes(input.kind) ? input.kind : null;
       const rows = await searchRequests(ctx.q, { studentIds, text, from, to, status, kind, limit: 200 });
       return withExpired(rows, todayOf(ctx));
     },

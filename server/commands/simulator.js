@@ -1,5 +1,6 @@
 import { register } from './index.js';
 import { HttpError, badRequest } from '../domain/errors.js';
+import { USER_ROLES } from '../domain/constants.js';
 
 /* L18: la "instancia única" del simulador (public/client/simulator.js) era por pestaña -- dos probadores
    que lo arrancan a la vez ejecutan `reset_demo` sobre la misma base compartida y se borran los datos
@@ -11,11 +12,10 @@ import { HttpError, badRequest } from '../domain/errors.js';
    puede correr el simulador, así que el comando no restringe roles más allá de tener sesión. */
 const LOCK_ID = 'sim_lock';
 const TTL_S = 900;
-const ROLES = ['admin', 'recepcion', 'profesor', 'garita', 'monitora', 'parent'];
 
 register({
   sim_lock: {
-    roles: ROLES,
+    roles: USER_ROLES,
     bump: false,
     handler: async (ctx, input) => {
       const nowS = Math.floor(ctx.now.getTime() / 1000);
