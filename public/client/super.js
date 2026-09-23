@@ -115,14 +115,32 @@ function simulatorBlock(s) {
     list.map((x) => '<tr><td>' + esc(x.name) + '</td><td>' + x.runs + '</td><td class="' + (x.completed ? 'ok-text' : '') + '">' + x.completed + '</td><td class="' + (x.exited ? 'danger-text' : '') + '">' + x.exited + '</td><td>' + (x.maxStep == null ? '—' : x.maxStep) + '</td><td>' + x.pauses + '</td><td>' + x.stepMode + '</td><td>' + x.speedChanges + ' cambios</td><td>' + x.resets + '</td><td>' + fmtDur(x.totalMs) + '</td><td class="small">' + fmtAgo(x.lastAt) + '</td></tr>').join('') + '</table>' +
     '<p class="small muted">Automático = sin pausas ni paso a paso. En la línea de tiempo, filtra por tipo <span class="mono">simulator</span> para ver cada acción.</p>';
 }
+/* "Ciudad, País" a partir del geo guardado con el login (solo existe en Vercel; nulo en local). */
+const geoText = (geo) => (geo && (geo.city || geo.country) ? [geo.city, geo.country].filter(Boolean).join(', ') : '');
+/* "Último acceso: Ciudad, País · IP · dispositivo (plataforma, navegador, pantalla)" — cualquiera de las
+   tres partes puede faltar (local no tiene geo; un probador sin `session_start` aún no tiene dispositivo). */
+function lastAccessText(t) {
+  const parts = [geoText(t.lastGeo), t.lastIp, t.lastDevice].filter(Boolean);
+  return parts.length ? parts.join(' · ') : '';
+}
 function testerCards(s) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
   return '<div class="section-title">Probadores</div><div class="act-grid">' + s.testers.map((t) => {
     const state = t.online ? 'on' : t.lastAt && new Date(t.lastAt) >= today ? 'today' : 'off';
     const label = t.online ? 'activo ahora' : t.lastAt ? 'última actividad ' + fmtAgo(t.lastAt) : 'sin actividad';
+    const access = lastAccessText(t);
     return '<div class="card act-card' + (SUP.testerId === t.id ? ' selected' : '') + '" data-action="focus" data-id="' + esc(t.id) + '"><div class="act-head"><span class="act-dot ' + state + '"></span><b>' + esc(t.name) + '</b>' + (t.super ? ' <span class="badge">super</span>' : '') + '</div>' +
-      '<div class="small muted">' + label + '</div><div class="act-stats"><span><b>' + t.sessions + '</b> ses.</span><span><b>' + fmtDur(t.activeMs) + '</b></span><span><b>' + t.actions + '</b> acciones</span><span class="' + (t.errors ? 'danger-text' : '') + '"><b>' + t.errors + '</b> errores</span></div></div>';
+      '<div class="small muted">' + label + '</div>' + (access ? '<div class="small muted mono">Último acceso: ' + esc(access) + '</div>' : '') +
+      '<div class="act-stats"><span><b>' + t.sessions + '</b> ses.</span><span><b>' + fmtDur(t.activeMs) + '</b></span><span><b>' + t.actions + '</b> acciones</span><span class="' + (t.errors ? 'danger-text' : '') + '"><b>' + t.errors + '</b> errores</span></div>' +
+      (t.devices && t.devices.length ? devicesBlock(t.devices) : '') + '</div>';
   }).join('') + '</div>';
+}
+/* Bloque "Dispositivos" dentro de la tarjeta de cada probador: cada huella distinta que ha usado, con
+   primera y última vez (Task 15, privacidad: solo para el super admin, se borra con el purge). */
+function devicesBlock(devices) {
+  return '<details class="small"><summary class="muted">Dispositivos (' + devices.length + ')</summary>' +
+    devices.map((d) => '<div class="mono small">' + esc(d.label || d.fp) + ' <span class="muted">· primera vez ' + fmtTs(d.firstAt) + ' · última ' + fmtAgo(d.lastAt) + '</span></div>').join('') +
+    '</details>';
 }
 function hotspots(s) {
   const maxScreen = Math.max(0, ...s.screens.map((x) => x.totalMs));
@@ -140,6 +158,9 @@ function sessions(s) {
   return '<div class="section-title">Sesiones (corte a ' + s.sessionGapMin + ' min sin actividad)</div><table class="tbl"><tr><th>Probador</th><th>Usuarios</th><th>Inicio</th><th>Duración</th><th>Eventos</th><th></th></tr>' +
     s.sessions.slice(0, 30).map((x) => '<tr class="' + (SUP.sid === x.sid ? 'selected' : '') + '"><td>' + esc(x.tester) + '</td><td class="small">' + esc(x.users.map(userName).join(', ')) + '</td><td class="mono small">' + fmtTs(x.started) + '</td><td>' + fmtDur(x.activeMs) + '</td><td>' + x.events + '</td><td><button class="btn tiny" data-action="session" data-sid="' + esc(x.sid) + '">' + (SUP.sid === x.sid ? 'Quitar filtro' : 'Ver línea de tiempo') + '</button></td></tr>').join('') + '</table>';
 }
+/* Estos tipos guardan geo (server, ver server/app.js recordRequest) y comparten `sid` con el `session_start`
+   que trae el dispositivo (cliente): en la línea de tiempo se muestran juntos. */
+const LOGIN_KINDS = new Set(['login', 'login_failed', 'pin', 'switch_user', 'super_login']);
 function timeline() {
   const kinds = ACT_KINDS.map((k) => '<option value="' + k + '"' + (SUP.kind === k ? ' selected' : '') + '>' + (k || 'Todos los tipos') + '</option>').join('');
   let h = '<div class="section-title">Línea de tiempo' + (SUP.sid ? ' · sesión <span class="mono">' + esc(SUP.sid) + '</span>' : '') + '</div>' +
@@ -148,8 +169,15 @@ function timeline() {
   h += '<table class="tbl act-events"><tr><th>Hora</th><th>Probador</th><th>Usuario</th><th>Evento</th><th>Pantalla</th><th>Duración</th><th>Resultado</th><th></th></tr>' + SUP.events.map((e) => {
     const bad = e.ok === false || /error|rejection/.test(e.kind);
     const testerName = (SUP.summary.testers.find((t) => t.id === (e.testerId || 'shared')) || {}).name || e.testerId || 'Compartido';
+    let where = '';
+    if (LOGIN_KINDS.has(e.kind)) {
+      const geo = e.data && e.data.geo ? e.data.geo : null;
+      const sess = (SUP.summary.sessions || []).find((x) => x.sid === e.sid);
+      const bits = [geoText(geo), sess ? sess.lastDevice : null].filter(Boolean);
+      if (bits.length) where = '<br><span class="muted small">' + esc(bits.join(' · ')) + '</span>';
+    }
     return '<tr class="' + (bad ? 'bad' : '') + '"><td class="mono small" title="' + esc(e.at) + '">' + fmtClockS(e.at) + '</td><td class="small">' + esc(testerName) + '</td><td class="small">' + esc(userName(e.userId)) + (e.role ? '<br><span class="muted">' + esc(roleName(e.role)) + '</span>' : '') + '</td>' +
-      '<td class="small">' + (KIND_ICON[e.kind] || '·') + ' <span class="mono">' + esc(e.kind) + '</span> <b>' + esc(e.name || '') + '</b>' + (e.target ? ' <span class="muted">→ ' + esc(e.target) + '</span>' : '') + '</td>' +
+      '<td class="small">' + (KIND_ICON[e.kind] || '·') + ' <span class="mono">' + esc(e.kind) + '</span> <b>' + esc(e.name || '') + '</b>' + (e.target ? ' <span class="muted">→ ' + esc(e.target) + '</span>' : '') + where + '</td>' +
       '<td class="mono small">' + esc(e.screen || '') + '</td><td class="small">' + (e.durationMs != null ? fmtDur(e.durationMs) : '') + '</td>' +
       '<td class="small">' + (e.status ? '<span class="mono">' + e.status + '</span> ' : '') + (e.error ? '<span class="danger-text">' + esc(e.error) + '</span>' : e.ok === true ? '✓' : '') + '</td>' +
       '<td><button class="btn tiny" data-action="copy" data-id="' + e.id + '" title="Copiar JSON del evento">📋</button></td></tr>';
@@ -335,6 +363,31 @@ function showLogin(message) {
     }
   };
 }
+/* Huella del propio navegador del super admin: mismas señales que public/client/telemetry.js, resumidas en
+   un hash corto. Se manda una vez por sesión a POST /api/super/fp (la cookie de /super no vale para
+   /api/telemetry, que exige sesión de la app); si falla no importa, /super sigue funcionando igual. */
+async function shortHash(obj) {
+  try {
+    const bytes = new TextEncoder().encode(JSON.stringify(obj));
+    const buf = await crypto.subtle.digest('SHA-256', bytes);
+    return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
+  } catch { return null; }
+}
+async function sendFingerprint() {
+  try {
+    const s = window.screen || {}, conn = navigator.connection || {}, uad = navigator.userAgentData;
+    const uaData = uad ? { brands: (uad.brands || []).map((b) => b.brand + ' ' + b.version), mobile: !!uad.mobile, platform: uad.platform || null } : null;
+    let tz = null;
+    try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || null; } catch { /* sin Intl */ }
+    const f = {
+      screenWidth: s.width || null, screenHeight: s.height || null, devicePixelRatio: window.devicePixelRatio || null, colorDepth: s.colorDepth || null,
+      languages: navigator.languages ? Array.from(navigator.languages).slice(0, 5) : null, platform: navigator.platform || null,
+      hardwareConcurrency: navigator.hardwareConcurrency || null, deviceMemory: navigator.deviceMemory || null, maxTouchPoints: navigator.maxTouchPoints || null,
+      tz, connection: conn.effectiveType || null, uaData, standalone: isStandalone(),
+    };
+    await postJ('/api/super/fp', { fp: { ...f, fp: await shortHash(f) } });
+  } catch { /* la huella nunca debe romper /super */ }
+}
 async function start(tester) {
   try { const me = await getJ('me'); SUP.tester = me.tester; SUP.users = me.users; }
   catch (err) { showLogin(tester ? 'No se pudo abrir la sesión.' : ''); return; }
@@ -342,6 +395,7 @@ async function start(tester) {
   const fromNotice = new URLSearchParams(location.search).get('tester');
   if (fromNotice) SUP.testerId = fromNotice;
   loadPush().then(() => { if (SUP.tester && !typing()) render(); });
+  sendFingerprint();
   document.getElementById('superLogout').style.display = '';
   setStatus('conectado · ' + SUP.tester.name);
   render();

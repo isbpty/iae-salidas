@@ -8,7 +8,7 @@ import { constantEquals, attemptsBlocked, recordLoginFailure, clearLoginFailures
 import { listUsers, getUser, getRevision, getAttachment, insertAudit, purgeActivity } from './db/repo.js';
 import { findTesterByPin, listTesters, regenerateTesterPin, renameTester, setAllowedUsers, getTester, revokeTesterSessions, testerAccess, allowsUser } from './testers.js';
 import { summary, events as activityEvents, exportCsv } from './activity-queries.js';
-import { classify, maskInput, recordServerEvent, ingestClientEvents } from './activity.js';
+import { classify, maskInput, recordServerEvent, ingestClientEvents, clientInfo, sanitizeFingerprint } from './activity.js';
 import { runCommand } from './commands/run.js';
 import { buildView } from './projections/index.js';
 import { canSeeAttachment } from './projections/access.js';
@@ -52,6 +52,10 @@ export function createApp(deps) {
     const source = config.serverless ? req.headers['x-forwarded-for'] || direct : direct;
     return String(source).split(',')[0].trim();
   };
+  /* Geolocalización aproximada (Task 15): solo existe detrás del edge de Vercel (`x-vercel-ip-*`); en local
+     y en los tests siempre es `null`. Se pide aparte de `clientIp`/`userAgent` porque solo un puñado de
+     eventos la guardan (login, login_failed, pin, switch_user, super_login) y el aviso push de entrada. */
+  const geoOf = (req) => clientInfo(req, config.serverless).geo;
   /* A token of a tester counts while the tester is active and it was issued after their last logout or new PIN
      (`sessions_valid_after`). Tokens of the shared PIN carry no tester and only expire. */
   const tokenCurrent = (token, access) => !!access && access.active && issuedAtMs(token) >= access.validAfterMs;
@@ -141,7 +145,7 @@ export function createApp(deps) {
       const sid = randomBytes(8).toString('hex');
       /* A tester came in (not the shared PIN, not the super admin themselves): notice to the /super devices, 3 s at most. */
       if (proof.testerId && !proof.super) {
-        await alertTesterLogin(deps, { tester: { id: proof.testerId, name: proof.testerName }, user, sid, ip: clientIp(req), ua: userAgent(req), now });
+        await alertTesterLogin(deps, { tester: { id: proof.testerId, name: proof.testerName }, user, sid, ip: clientIp(req), ua: userAgent(req), geo: geoOf(req), now });
       }
       return startSession(res, user, proof, act, sid);
     }
@@ -213,6 +217,18 @@ export function createApp(deps) {
             return json(res, 200, { sent: r.sent, removed: r.removed, failed: r.failed, ...(r.error ? { error: r.error } : {}) });
           }
           return json(res, 404, { error: 'not_found' });
+        }
+        /* Huella del propio navegador del super admin (Task 15): misma lista blanca que la de los probadores
+           (ver activity.js), guardada a mano como un `session_start` de cliente porque esta sesión no lleva
+           la cookie de la app (`ingestClientEvents` la exige). No pasa por `recordRequest` (classify la ignora). */
+        if (path === 'super/fp') {
+          const data = sanitizeFingerprint(input.fp);
+          await recordServerEvent(db, {
+            at: now, testerId: sup.testerId, userId: null, role: 'super', sid: sup.sid, source: 'client', kind: 'session_start', name: 'super',
+            screen: null, target: null, durationMs: null, ok: true, error: null, status: null, revision: null,
+            ip: clientIp(req), ua: userAgent(req), data, fp: data && typeof data.fp === 'string' ? String(data.fp).slice(0, 64) : null,
+          });
+          return json(res, 200, { ok: true });
         }
         const audit = (summary) => insertAudit(db, { at: now, actorUserId: null, actorRole: 'super', actorName: 'Super admin (' + sup.testerName + ')', command: path, channel: 'super', summary });
         if (path === 'super/regenerate') {
@@ -368,11 +384,16 @@ export function createApp(deps) {
     /* Anonymous polls (a 401 before logging in) are noise, not activity. Failed logins do count. */
     if (!act.user && !['login', 'login_failed', 'pin', 'super_login', 'super_logout', 'super_action'].includes(kind)) return;
     const s = act.session || {};
+    /* Desde dónde y con qué se conecta cada probador (Task 15): la geolocalización aproximada (solo existe
+       en Vercel) se guarda junto al resto de `data` en los eventos que cuentan como "entrar" o "cambiar de
+       usuario", no en cada petición (sería ruido y repetiría lo mismo cientos de veces por sesión). */
+    const geo = ['login', 'login_failed', 'pin', 'switch_user', 'super_login'].includes(kind) ? geoOf(req) : null;
+    const base = act.input ? maskInput(act.input) : null;
     await recordServerEvent(db, {
       at: startedAt, testerId: s.testerId || null, userId: act.user ? act.user.id : null, role: act.user ? act.user.role : null, sid: s.sid || null,
       source: 'server', kind, name: act.name || c.name, screen: null, target: null, durationMs: Math.round(performance.now() - startedMs),
       ok, error: act.error || null, status, revision: act.revision == null ? null : act.revision, ip: clientIp(req), ua: userAgent(req),
-      data: act.input ? maskInput(act.input) : null,
+      data: geo ? { ...(base || {}), geo } : base,
     });
   }
   async function handler(req, res) {

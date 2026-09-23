@@ -78,8 +78,12 @@ async function claimLoginAlert(db, testerId, now) {
   return r.length > 0;
 }
 
-/* After a successful auth/login of a named tester: "Probador X entró como Y (rol) · HH:MM" to every device. */
-export async function notifyTesterLogin(deps, { tester, user, sid, ip, ua, now }) {
+/* "· Ciudad, País" al final del cuerpo cuando la geolocalización de la IP se conoce (solo en Vercel); vacío
+   si no hay ninguno de los dos (ver clientInfo en activity.js). */
+const placeSuffix = (geo) => (geo && (geo.city || geo.country) ? ' · ' + [geo.city, geo.country].filter(Boolean).join(', ') : '');
+
+/* After a successful auth/login of a named tester: "Probador X entró como Y (rol) · HH:MM [· Ciudad, País]" to every device. */
+export async function notifyTesterLogin(deps, { tester, user, sid, ip, ua, geo, now }) {
   if (!pushEnabled(deps) || !tester || !tester.id) return null;
   const { db } = deps;
   if (!(await subscriptionCounts(db, tester.id)).devices) return null;
@@ -87,7 +91,7 @@ export async function notifyTesterLogin(deps, { tester, user, sid, ip, ua, now }
   const name = tester.name || tester.id;
   const payload = {
     title: 'IAE Salidas · entró ' + name,
-    body: name + ' entró como ' + user.name + ' (' + roleLabel(user.role) + ') · ' + nowHHMM(now, await tzOf(db)),
+    body: name + ' entró como ' + user.name + ' (' + roleLabel(user.role) + ') · ' + nowHHMM(now, await tzOf(db)) + placeSuffix(geo),
     url: '/super?tester=' + encodeURIComponent(tester.id),
     tag: 'login-' + tester.id,
   };

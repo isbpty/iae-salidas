@@ -83,6 +83,66 @@ test('summary derives sessions with a 10 minute gap and aggregates hot spots', a
   await t.close();
 });
 
+/* Task 15: IP, geolocalización aproximada y huella del dispositivo. Cada fila es lo que `server/app.js` y
+   `ingestClientEvents` (server/activity.js) ya dejarían en la base: un `login` con `data.geo`, y un
+   `session_start` de cliente con la huella (ua + data + su propia columna `fp`). */
+const CHROME_MAC = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
+const SAFARI_IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1';
+const geoRow = (o) => ({
+  at: new Date(T0 + (o.min || 0) * M), testerId: o.t === undefined ? 't2' : o.t, userId: o.u || 'u_p1', role: o.r || 'parent',
+  sid: o.sid || 'sA', source: o.source || 'server', kind: o.kind || 'command', name: o.name || 'x',
+  screen: null, target: null, durationMs: 100, ok: true, error: null, status: 200, revision: null,
+  ip: o.ip || null, ua: o.ua || null, data: o.data || null, fp: o.fp || null,
+});
+
+test('summary exposes lastIp/lastGeo/lastDevice per probador y por sesión, y una lista de dispositivos distintos', async () => {
+  const t = await makeTestApp();
+  await t.run('create_testers', 'u_s1');
+  const geoPty = { city: 'Ciudad de Panamá', country: 'PA' };
+  const geoDavid = { city: 'David', country: 'PA' };
+  const mac = { platform: 'MacIntel', screenWidth: 1512, screenHeight: 982, fp: 'fpAAA111' };
+  const iphone = { platform: 'iPhone', screenWidth: 390, screenHeight: 844, fp: 'fpBBB222' };
+  await insertRows(t.db, 'activity_events', [
+    geoRow({ min: 0, sid: 'sA', kind: 'login', name: 'auth/login', ip: '203.0.113.1', data: { geo: geoPty } }),
+    geoRow({ min: 0.5, sid: 'sA', source: 'client', kind: 'session_start', name: 'app', ip: '203.0.113.1', ua: CHROME_MAC, data: mac, fp: mac.fp }),
+    geoRow({ min: 20, sid: 'sB', kind: 'login', name: 'auth/login', ip: '198.51.100.2', data: { geo: geoDavid } }),
+    geoRow({ min: 20.5, sid: 'sB', source: 'client', kind: 'session_start', name: 'app', ip: '198.51.100.2', ua: SAFARI_IPHONE, data: iphone, fp: iphone.fp }),
+  ]);
+  const s = await summary(t.db, {}, new Date(T0 + 25 * M));
+  const t2 = s.testers.find((x) => x.id === 't2');
+  assert.equal(t2.lastIp, '198.51.100.2', 'the most recent IP of any kind');
+  assert.deepEqual(t2.lastGeo, geoDavid);
+  assert.equal(t2.lastDevice, 'iPhone · Safari · 390×844', 'the most recent session_start');
+  assert.equal(t2.devices.length, 2, 'two distinct fingerprints');
+  const byFp = Object.fromEntries(t2.devices.map((d) => [d.fp, d]));
+  assert.equal(byFp.fpAAA111.label, 'MacIntel · Chrome · 1512×982');
+  assert.equal(byFp.fpBBB222.label, 'iPhone · Safari · 390×844');
+  assert.equal(byFp.fpAAA111.firstAt, new Date(T0 + 0.5 * M).toISOString());
+  assert.equal(byFp.fpAAA111.lastAt, byFp.fpAAA111.firstAt, 'seen once so far');
+
+  const sA = s.sessions.find((x) => x.sid === 'sA'), sB = s.sessions.find((x) => x.sid === 'sB');
+  assert.equal(sA.lastIp, '203.0.113.1'); assert.deepEqual(sA.lastGeo, geoPty); assert.equal(sA.lastDevice, 'MacIntel · Chrome · 1512×982');
+  assert.equal(sB.lastIp, '198.51.100.2'); assert.deepEqual(sB.lastGeo, geoDavid); assert.equal(sB.lastDevice, 'iPhone · Safari · 390×844');
+
+  /* a tester with no activity at all still gets the fields, just empty/null (never throws) */
+  const idle = s.testers.find((x) => x.id === 't7');
+  assert.equal(idle.lastIp, null); assert.equal(idle.lastGeo, null); assert.equal(idle.lastDevice, null); assert.deepEqual(idle.devices, []);
+
+  /* events() and exportCsv() surface city/country/fp for the login row and the fp for the session_start */
+  const page = await events(t.db, { sid: 'sB' });
+  const loginEv = page.events.find((e) => e.kind === 'login');
+  assert.equal(loginEv.city, 'David'); assert.equal(loginEv.country, 'PA'); assert.equal(loginEv.fp, null);
+  const ssEv = page.events.find((e) => e.kind === 'session_start');
+  assert.equal(ssEv.fp, 'fpBBB222'); assert.equal(ssEv.city, null, 'session_start carries no geo of its own');
+
+  const csv = await exportCsv(t.db, { sid: 'sA' });
+  const [header, ...lines] = csv.trim().split('\r\n');
+  assert.deepEqual(header.split(',').slice(16, 20), ['ip', 'city', 'country', 'fp']);
+  assert.ok(lines.some((l) => l.includes(',Ciudad de Panamá,PA,')));
+  assert.ok(lines.some((l) => l.includes(',,,fpAAA111,')));
+  await t.close();
+});
+
 test('activity routes answer only to the /super cookie', async () => {
   const t = await makeTestApp(); const { base, close } = await t.listen();
   const { result: made } = await t.run('create_testers', 'u_s1');

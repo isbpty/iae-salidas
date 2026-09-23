@@ -43,6 +43,21 @@ test('a tester login sends one push to every subscription: tester, user, role an
   assert.equal(rows[0].data.sent, 2);
 });
 
+test('the push body appends "· Ciudad, País" when the login geolocation is known (Vercel headers, serverless only)', async (ctx) => {
+  const { push, made, sup, base } = await setup(ctx, { config: { ...VAPID, serverless: true } });
+  await post(base, '/api/super/push/subscribe', { subscription: sub(1) }, sup);
+  const geoHeaders = { 'x-forwarded-for': '198.51.100.7', 'x-vercel-ip-country': 'PA', 'x-vercel-ip-city': 'David' };
+  await call(base, '/api/auth/login', { method: 'POST', body: { userId: 'u_p1', pin: made[1].pin }, headers: geoHeaders });
+  assert.equal(push.sent.length, 1);
+  assert.equal(push.sent[0].payload.body, 'Probador 2 entró como Carlos Rodríguez (Padre/Madre) · 10:30 · David, PA');
+
+  /* serverless but no Vercel headers at all on this second login (another tester): no place suffix */
+  await call(base, '/api/auth/login', { method: 'POST', body: { userId: 'u_p1', pin: made[2].pin } });
+  assert.equal(push.sent.length, 2);
+  assert.ok(!push.sent[1].payload.body.includes(' · David'), 'no geo headers, no place in the body');
+  assert.ok(!/,\s*[A-Z]{2}$/.test(push.sent[1].payload.body), 'no dangling ", XX" when geo is unknown');
+});
+
 test('10 minute cooldown per tester; auth/switch and the shared PIN never notify', async (ctx) => {
   const { t, push, made, sup, base } = await setup(ctx);
   await post(base, '/api/super/push/subscribe', { subscription: sub(1) }, sup);
