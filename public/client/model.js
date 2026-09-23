@@ -44,7 +44,7 @@ function pickupCandidates(studentId, date) {
 }
 function staffCan(cap) { return !!(V.capabilities || {})[cap]; }
 function getTrip(routeId, leg) { return (V.trips || []).find((t) => t.routeId === routeId && t.leg === leg) || { status: 'programado', boarded: {}, noBus: [] }; }
-function currentLeg(r) { return (V.gpsNow || {})[r.id] || null; }
+function gpsPosition(r) { return (V.gpsNow || {})[r.id] || null; }
 function legStops(r, leg) { return leg === 'ida' ? r.stops.slice().reverse() : r.stops; }
 function busPosition(r, leg, progress) {
   const stops = legStops(r, leg); const n = stops.length;

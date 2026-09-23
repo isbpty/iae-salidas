@@ -40,7 +40,7 @@ export async function insertSalidaRequest(ctx, req) {
 export function withExpired(requests, today) {
   return requests.map((r) => ({ ...r, expired: r.kind === 'salida' && r.status === 'aprobada' && r.date < today }));
 }
-async function loadSalida(ctx, id) {
+async function loadRequest(ctx, id) {
   /* Lock the row for the rest of the transaction so two garita officers cannot both read
      `aprobada` and both write a transition -- the lock and the hydrated read used to be two
      separate queries; `FOR UPDATE` on the hydrating `SELECT *` itself does both in one (R2). */
@@ -167,7 +167,7 @@ export async function createRequest(ctx, data) {
 }
 
 export async function approveRequest(ctx, id, opts = {}) {
-  const req = await loadSalida(ctx, id);
+  const req = await loadRequest(ctx, id);
   if (req.kind !== 'salida' || req.status !== 'pendiente') conflict('request_not_pending');
   if (req.date < todayOf(ctx)) conflict('date_in_past');
   const st = await ctx.getStudent(req.studentId);
@@ -211,7 +211,7 @@ export async function approveRequest(ctx, id, opts = {}) {
 }
 
 export async function rejectRequest(ctx, id, reason, byStaffId) {
-  const req = await loadSalida(ctx, id);
+  const req = await loadRequest(ctx, id);
   if (req.status !== 'pendiente') conflict('request_not_pending');
   const st = await ctx.getStudent(req.studentId);
   const staff = await getStaff(ctx.q, byStaffId);
@@ -227,7 +227,7 @@ export async function rejectRequest(ctx, id, reason, byStaffId) {
 }
 
 export async function acceptExcusa(ctx, id, byStaffId) {
-  const req = await loadSalida(ctx, id);
+  const req = await loadRequest(ctx, id);
   if (req.kind !== 'excusa' || req.status !== 'pendiente') conflict('request_not_pending');
   const st = await ctx.getStudent(req.studentId);
   const staff = await getStaff(ctx.q, byStaffId);
@@ -240,7 +240,7 @@ export async function acceptExcusa(ctx, id, byStaffId) {
 }
 
 export async function cancelRequest(ctx, id, personId) {
-  const req = await loadSalida(ctx, id);
+  const req = await loadRequest(ctx, id);
   if (!['pendiente', 'aprobada'].includes(req.status)) conflict('request_not_cancellable');
   const st = await ctx.getStudent(req.studentId);
   const p = await ctx.getPerson(personId);
@@ -256,7 +256,7 @@ export async function cancelRequest(ctx, id, personId) {
 
 /* ---------- staff: cancel a pendiente/aprobada salida or excusa (L15) ---------- */
 export async function staffCancelRequest(ctx, id, reason, byStaffId) {
-  const req = await loadSalida(ctx, id);
+  const req = await loadRequest(ctx, id);
   if (!['pendiente', 'aprobada'].includes(req.status)) conflict('request_not_cancellable');
   const st = await ctx.getStudent(req.studentId);
   const staff = await getStaff(ctx.q, byStaffId);
@@ -282,7 +282,7 @@ export async function staffCancelRequest(ctx, id, reason, byStaffId) {
 
 /* ---------- garita: confirmación una_vez y retiro (used by Task 7) ---------- */
 export async function requestConfirmation(ctx, id, byStaffId) {
-  const req = await loadSalida(ctx, id);
+  const req = await loadRequest(ctx, id);
   if (req.kind !== 'salida' || req.status !== 'aprobada') conflict('request_not_approved');
   /* Use the current eligibility, not the pickupKind frozen at approval: it may have changed since
      (a revocation followed by a new una_vez authorization, for instance). */
@@ -310,7 +310,7 @@ export async function requestConfirmation(ctx, id, byStaffId) {
    which is what actually reopens it -- L7. Without this, whichever answer lands last would win,
    including a stale "Sí" arriving after a titular already said "NO". */
 export async function confirmPickup(ctx, id, personId, yes) {
-  const req = await loadSalida(ctx, id);
+  const req = await loadRequest(ctx, id);
   if (req.status !== 'aprobada') conflict('request_not_approved');
   const current = await pickupEligibility(ctx, req.studentId, req.pickupBy, req.date);
   if (current.kind !== 'una_vez') conflict('confirmation_not_needed');
@@ -333,7 +333,7 @@ export async function confirmPickup(ctx, id, personId, yes) {
 }
 
 export async function markExit(ctx, id, byStaffId) {
-  const req = await loadSalida(ctx, id);
+  const req = await loadRequest(ctx, id);
   if (req.kind !== 'salida' || req.status !== 'aprobada') conflict('request_not_approved');
   if (req.date !== todayOf(ctx)) throw new HttpError(409, 'not_today', 'Esta salida es del ' + fmtDate(ctx, req.date) + ', no se puede marcar el retiro hoy.');
   const st = await ctx.getStudent(req.studentId);

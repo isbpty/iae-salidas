@@ -6,7 +6,7 @@ import { describePickup } from './requests.js';
 import { conflict, notFound, badRequest } from './errors.js';
 
 const EMPTY_TRIP = () => ({ status: 'programado', boarded: {}, noBus: [] });
-export const currentLeg = (ctx, r) => ctx.gps.position(r, ctx);
+export const gpsPosition = (ctx, r) => ctx.gps.position(r, ctx);
 export function nextLegInfo(ctx, r) {
   const now = minutesOf(nowHHMM(ctx.now, ctx.tz));
   for (const leg of ['ida', 'vuelta']) if (now < minutesOf(r.schedule[leg].start)) return LEG_NAMES[leg] + ' a las ' + fmtTime(r.schedule[leg].start);
@@ -28,7 +28,7 @@ export function busPosition(r, leg, progress) {
 export async function busStatusFor(ctx, st) {
   const r = st.routeId ? await getRoute(ctx.q, st.routeId) : null;
   if (!r) return null;
-  const cur = currentLeg(ctx, r);
+  const cur = gpsPosition(ctx, r);
   if (!cur) return { r, active: false };
   const trip = (await findTrip(ctx.q, todayISO(ctx.now, ctx.tz), r.id, cur.leg)) || EMPTY_TRIP();
   return { r, active: true, leg: cur.leg, trip, rec: trip.boarded[st.id], noBus: trip.noBus.includes(st.id), stop: r.stops.find((s) => s.id === st.stopId), pos: busPosition(r, cur.leg, cur.progress), progress: cur.progress, simulated: cur.simulated };

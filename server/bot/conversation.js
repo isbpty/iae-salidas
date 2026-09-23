@@ -85,8 +85,8 @@ export async function handleIncoming(ctx, key, text) {
   }
   const kids = await studentsOf(ctx, p.id);
   const n = normalize(text);
-  const st = await getConversation(ctx.q, key, ctx);
-  if (st && st.step) return handleStep(ctx, key, p, kids, st, n, text);
+  const conv = await getConversation(ctx.q, key, ctx);
+  if (conv && conv.step) return handleStep(ctx, key, p, kids, conv, n, text);
   if (!kids.length) {
     const auths = await authorizedFor(ctx, p.id);
     return reply(ctx, key, 'Hola ' + firstName(p.name) + '. No tienes hijos registrados como titular.' + (auths.length ? ' Estás autorizado(a) para retirar a: ' + auths.map((a) => a.student.name).join(', ') + '. Las solicitudes las crean los padres titulares.' : ''));
@@ -109,8 +109,8 @@ async function startSalida(ctx, key, p, kids, n, raw) {
   const draft = { kind: 'salida', requestedBy: p.id, channel: 'whatsapp', studentId: matchKid(n, kids), date: parseDate(n, ctx), time: parseTime(n), pickupHint: extractPickupHint(n), reason: raw };
   return continueSalida(ctx, key, p, kids, { step: 'salida', draft });
 }
-async function continueSalida(ctx, key, p, kids, st) {
-  const d = st.draft;
+async function continueSalida(ctx, key, p, kids, conv) {
+  const d = conv.draft;
   if (!d.studentId) { await setState(ctx, key, { step: 'ask_child', draft: d }); return reply(ctx, key, '¿A cuál de tus hijos? ', kids.map((k) => firstName(k.name))); }
   const kid = await getStudent(ctx.q, d.studentId);
   if (!d.time) { await setState(ctx, key, { step: 'ask_time', draft: d }); return reply(ctx, key, '¿A qué hora necesitas que ' + firstName(kid.name) + ' salga ' + fmtDate(ctx, d.date) + '? (ej. 3:30 pm)'); }
@@ -131,8 +131,8 @@ async function startExcusa(ctx, key, p, kids, n, raw) {
   const draft = { kind: 'excusa', requestedBy: p.id, channel: 'whatsapp', studentId: matchKid(n, kids), date: parseDate(n, ctx), excusaType: /tard/.test(n) ? 'tardanza' : 'ausencia', reason: raw };
   return continueExcusa(ctx, key, p, kids, { step: 'excusa', draft });
 }
-async function continueExcusa(ctx, key, p, kids, st) {
-  const d = st.draft;
+async function continueExcusa(ctx, key, p, kids, conv) {
+  const d = conv.draft;
   if (!d.studentId) { await setState(ctx, key, { step: 'ask_child', draft: d }); return reply(ctx, key, '¿Para cuál de tus hijos es la excusa?', kids.map((k) => firstName(k.name))); }
   const kid = await getStudent(ctx.q, d.studentId);
   await setState(ctx, key, { step: 'confirm', draft: d });
@@ -181,19 +181,19 @@ async function finishNoBus(ctx, key, p, d) {
    concludes normally, so a queued alert is never silently dropped. */
 const finishStep = (ctx, key) => advanceAlert(ctx, key);
 
-async function continueDraft(ctx, key, p, kids, st) {
-  const d = st.draft;
-  if (d && d.kind === 'excusa') return continueExcusa(ctx, key, p, kids, st);
+async function continueDraft(ctx, key, p, kids, conv) {
+  const d = conv.draft;
+  if (d && d.kind === 'excusa') return continueExcusa(ctx, key, p, kids, conv);
   if (d && d.kind === 'donde') { await finishStep(ctx, key); return finishDonde(ctx, key, p, d.studentId); }
   if (d && d.kind === 'nobus') { await finishStep(ctx, key); return finishNoBus(ctx, key, p, d); }
-  return continueSalida(ctx, key, p, kids, st);
+  return continueSalida(ctx, key, p, kids, conv);
 }
 
 /* A proactive "does this look right?" notice (L9). Unlike confirm_pickup it is never urgent enough
    to interrupt a draft (see queueAlert in domain/requests.js), so by the time this runs there is
    never a draft to protect -- just this alert, possibly with more queued behind it. */
-async function handleAlertPickup(ctx, key, p, kids, st, n) {
-  const req = await getRequest(ctx.q, st.requestId);
+async function handleAlertPickup(ctx, key, p, kids, conv, n) {
+  const req = await getRequest(ctx.q, conv.requestId);
   if (!req || !['aprobada', 'pendiente', 'retirado'].includes(req.status)) {
     await finishStep(ctx, key);
     return reply(ctx, key, 'Esa salida ya fue cancelada.\n\n' + botMenu(ctx, p, kids));
@@ -226,8 +226,8 @@ async function handleAlertPickup(ctx, key, p, kids, st, n) {
   return reply(ctx, key, '¿Reconoces a ' + pk.name + ' (' + pk.relation + ') retirando a ' + firstName(kid.name) + '? Responde "Es correcto" o "NO".', ['Es correcto', 'NO']);
 }
 
-async function handleConfirmPickup(ctx, key, p, kids, st, n) {
-  const req = await getRequest(ctx.q, st.requestId);
+async function handleConfirmPickup(ctx, key, p, kids, conv, n) {
+  const req = await getRequest(ctx.q, conv.requestId);
   if (!req || req.status !== 'aprobada') {
     // The request stopped needing an answer through another channel (L8): explain, don't crash.
     await finishStep(ctx, key);
@@ -252,34 +252,34 @@ async function handleConfirmPickup(ctx, key, p, kids, st, n) {
   return reply(ctx, key, 'Responde SÍ para confirmar o NO para negar la entrega.', ['Sí, confirmo', 'No']);
 }
 
-async function handleAskChild(ctx, key, p, kids, st, n) {
-  const d = st.draft;
+async function handleAskChild(ctx, key, p, kids, conv, n) {
+  const d = conv.draft;
   const kid = kids.find((k) => new RegExp('\\b' + normalize(firstName(k.name)) + '\\b').test(n));
   if (!kid) return reply(ctx, key, 'No reconocí el nombre. Elige uno:', kids.map((k) => firstName(k.name)));
   d.studentId = kid.id;
-  return continueDraft(ctx, key, p, kids, st);
+  return continueDraft(ctx, key, p, kids, conv);
 }
-async function handleAskTime(ctx, key, p, kids, st, n) {
-  const d = st.draft;
+async function handleAskTime(ctx, key, p, kids, conv, n) {
+  const d = conv.draft;
   const t = parseTime(n);
   if (!t) return reply(ctx, key, 'No entendí la hora. Escríbela como 3:30 pm o 15:30.');
   d.time = t;
   const nd = parseDate(n, ctx);
   if (nd !== todayISO(ctx.now, ctx.tz)) d.date = nd;
-  return continueDraft(ctx, key, p, kids, st);
+  return continueDraft(ctx, key, p, kids, conv);
 }
-async function handleAskPickup(ctx, key, p, kids, st, n) {
-  const d = st.draft;
+async function handleAskPickup(ctx, key, p, kids, conv, n) {
+  const d = conv.draft;
   if (/^(no|nadie|ninguno|ninguna)\b/.test(n)) { await finishStep(ctx, key); return reply(ctx, key, 'Ok, descarté la solicitud. Registra a la persona en la app y vuelve a escribirme.'); }
   const hint = /^yo\b/.test(n) ? 'yo' : n.replace(/\(.*\)/, '').trim();
   const pid = await resolvePickup(ctx, hint, d.studentId, p.id, d.date);
   if (!pid) return reply(ctx, key, 'Esa persona no está autorizada. Elige una de la lista o regístrala en la app.', candidateLabels(await pickupCandidates(ctx, d.studentId, d.date), p));
   d.pickupBy = pid;
-  return continueDraft(ctx, key, p, kids, st);
+  return continueDraft(ctx, key, p, kids, conv);
 }
-async function handleConfirmDraft(ctx, key, p, kids, st, n) {
-  const d = st.draft;
-  if (/adjunt|certificado|📎/.test(n)) { d.attachment = 'certificado_medico.jpg'; await reply(ctx, key, '📎 Recibí certificado_medico.jpg ✅'); return continueDraft(ctx, key, p, kids, st); }
+async function handleConfirmDraft(ctx, key, p, kids, conv, n) {
+  const d = conv.draft;
+  if (/adjunt|certificado|📎/.test(n)) { d.attachment = 'certificado_medico.jpg'; await reply(ctx, key, '📎 Recibí certificado_medico.jpg ✅'); return continueDraft(ctx, key, p, kids, conv); }
   if (/^(si|sí|s|yes|correcto|ok|dale|confirmo)\b/.test(n)) {
     await finishStep(ctx, key);
     const { pickupHint, attachment, ...data } = d;
@@ -297,7 +297,7 @@ async function handleConfirmDraft(ctx, key, p, kids, st, n) {
   return reply(ctx, key, 'Responde Sí para enviar o No para descartar.', ['Sí', 'No']);
 }
 
-/* One small handler per step (C8) instead of a long if-chain over st.step. */
+/* One small handler per step (C8) instead of a long if-chain over conv.step. */
 const STEP_HANDLERS = {
   alert_pickup: handleAlertPickup,
   confirm_pickup: handleConfirmPickup,
@@ -307,10 +307,10 @@ const STEP_HANDLERS = {
   confirm: handleConfirmDraft,
 };
 
-async function handleStep(ctx, key, p, kids, st, n, raw) {
+async function handleStep(ctx, key, p, kids, conv, n, raw) {
   if (/\bcancelar\b/.test(n)) { await finishStep(ctx, key); return reply(ctx, key, 'Listo, cancelé el proceso. ' + botMenu(ctx, p, kids)); }
-  const handler = STEP_HANDLERS[st.step];
-  if (handler) return handler(ctx, key, p, kids, st, n, raw);
+  const handler = STEP_HANDLERS[conv.step];
+  if (handler) return handler(ctx, key, p, kids, conv, n, raw);
   await finishStep(ctx, key);
   return reply(ctx, key, botMenu(ctx, p, kids));
 }
