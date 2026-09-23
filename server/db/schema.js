@@ -124,4 +124,32 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
   created_at timestamptz NOT NULL, last_ok_at timestamptz, failures integer NOT NULL DEFAULT 0);
 `,
   },
+  {
+    /* Task 15: IP, geolocalización aproximada (por cabeceras de Vercel) y huella del dispositivo por sesión.
+       `fp` es el hash corto que el cliente calcula de su huella (pantalla, plataforma, zona horaria…) y
+       manda solo en el evento `session_start`; sirve para agrupar "Dispositivos" por probador en /super sin
+       guardar nada que identifique a la persona por sí solo. La IP y la geolocalización ya vivían en las
+       columnas `ip`/`data` de `activity_events` (sin columna propia): esta migración solo añade `fp`. */
+    version: '010_activity_fingerprint',
+    sql: `
+ALTER TABLE activity_events ADD COLUMN IF NOT EXISTS fp text;
+CREATE INDEX IF NOT EXISTS activity_tester_fp ON activity_events(tester_id, fp);
+`,
+  },
+  {
+    /* Task 8 (L10): role notices ("todo el rol") were read for everyone the instant one member of
+       the role opened the app, because `mark_notifications_read` set the shared `notifications.read_at`
+       column. This table tracks who (which `users.id`) has read which role notice, so two recepcionistas
+       reading independently don't silence each other's unread badge/toasts. Personal notices
+       (`person_id`/`staff_id` target) keep using `notifications.read_at` -- only one user can ever see
+       those anyway. */
+    version: '011_notification_reads',
+    sql: `
+CREATE TABLE IF NOT EXISTS notification_reads (
+  notification_id text NOT NULL REFERENCES notifications(id) ON DELETE CASCADE,
+  user_id text NOT NULL,
+  read_at timestamptz NOT NULL,
+  PRIMARY KEY (notification_id, user_id));
+`,
+  },
 ];

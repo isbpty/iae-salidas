@@ -139,14 +139,33 @@ export async function listNotifications(q, target) {
   const params = []; const w = targetWhere(target, params);
   return all(await q.query(`SELECT * FROM notifications WHERE ${w} ORDER BY created_at, seq`, params)).map((n) => ({ ...n, ts: n.createdAt, read: !!n.readAt }));
 }
-export async function markNotificationsRead(q, target, at) {
+/* Personal notices (`personId`/`staffId` target) are only ever seen by one user, so "read" is still
+   the shared `read_at` column. Role notices are shared by everyone in the role (L10): marking one
+   read must not silence it for the rest, so it's recorded per `userId` in `notification_reads`
+   instead of touching the notification row. `userId` is required whenever `target.role` is set. */
+export async function markNotificationsRead(q, target, at, userId) {
+  if (target.role) {
+    await q.query(
+      `INSERT INTO notification_reads(notification_id, user_id, read_at)
+       SELECT id, $2, $3 FROM notifications WHERE role=$1
+       ON CONFLICT (notification_id, user_id) DO NOTHING`,
+      [target.role, userId, at.toISOString()]);
+    return;
+  }
   const params = [at.toISOString()]; const w = targetWhere(target, params);
   await q.query(`UPDATE notifications SET read_at=$1 WHERE read_at IS NULL AND ${w}`, params);
 }
 /* Staff views need both "notices for my role" and "notices for me by staff id" -- two separate
-   `listNotifications` calls before. One `role=$1 OR staff_id=$2` query returns the same rows. */
-export async function listNotificationsForStaff(q, role, staffId) {
-  return all(await q.query('SELECT * FROM notifications WHERE role=$1 OR staff_id=$2 ORDER BY created_at, seq', [role, staffId])).map((n) => ({ ...n, ts: n.createdAt, read: !!n.readAt }));
+   `listNotifications` calls before. One `role=$1 OR staff_id=$2` query returns the same rows.
+   `userId` (the caller's `users.id`) is joined against `notification_reads` to compute `read` for
+   role notices per user (L10); staff-targeted notices keep using their own `read_at`. */
+export async function listNotificationsForStaff(q, role, staffId, userId) {
+  const rows = await q.query(
+    `SELECT n.*, nr.read_at AS role_read_at FROM notifications n
+     LEFT JOIN notification_reads nr ON nr.notification_id = n.id AND nr.user_id = $3
+     WHERE n.role=$1 OR n.staff_id=$2 ORDER BY n.created_at, n.seq`,
+    [role, staffId, userId]);
+  return all(rows).map((n) => ({ ...n, ts: n.createdAt, read: n.role ? !!n.roleReadAt : !!n.readAt }));
 }
 
 /* ---------- chat & conversation ---------- */

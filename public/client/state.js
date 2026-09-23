@@ -51,9 +51,18 @@ async function apply(name, input) {
   catch (e) { if (e.status === 401) showLogin(); else toast(errorText(e), 'error'); throw e; }
   finally { UI.busy = false; }
 }
+/* L10: marcar "leído" solo tras 5 s con la pestaña visible (y solo si hay algo sin leer), para no
+   apagar los avisos de rol de otro usuario en cuanto alguien abre la app un instante. Si la pestaña
+   se oculta antes de los 5 s, el disparo se salta y no se reprograma aquí: `api.subscribe` refresca
+   y vuelve a pintar en cuanto la pestaña vuelve a estar visible, y ese redibujado llama de nuevo a
+   `markReadSoon`, reiniciando la cuenta. */
 function markReadSoon() {
-  if (!V || !V.unread || markTimer) return;
-  markTimer = setTimeout(() => { markTimer = null; apply('mark_notifications_read', {}).then(() => render()).catch(() => {}); }, 800);
+  if (!V || !V.unread || markTimer || document.hidden) return;
+  markTimer = setTimeout(() => {
+    markTimer = null;
+    if (document.hidden || !V || !V.unread) return;
+    apply('mark_notifications_read', {}).then(() => render()).catch(() => {});
+  }, 5000);
 }
 async function boot() {
   try { const r = await api.view(); adopt(r); afterLogin(); }

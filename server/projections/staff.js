@@ -52,7 +52,7 @@ export async function staffView(ctx) {
   const routes = can(ctx, 'ver_rutas') ? (me.routeId ? allRoutes.filter((r) => r.id === me.routeId) : allRoutes) : [];
   const routeIds = new Set(routes.map((r) => r.id));
   const trips = (await listTripsOn(ctx.q, today)).filter((t) => routeIds.has(t.routeId));
-  const notifications = await listNotificationsForStaff(ctx.q, role, me.id);
+  const notifications = await listNotificationsForStaff(ctx.q, role, me.id, ctx.user.id);
   const staff = await listStaff(ctx.q);
   return {
     me,
