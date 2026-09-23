@@ -6,6 +6,7 @@
    - `DATABASE_URL` = cadena de Neon
    - `SESSION_SECRET` = 32+ caracteres aleatorios (`openssl rand -hex 32`)
    - `PILOT_PIN` = el PIN compartido del demo
+   - `PILOT_PIN_SHARED` -- déjala sin poner (o en `false`) en producción: el PIN compartido de `PILOT_PIN` queda apagado y cada probador entra con el suyo. Solo se pone en `true` en local, o brevemente para crear los 10 probadores la primera vez (`POST /api/commands/create_testers` como Administración) antes de apagarla de nuevo -- ver el README ("Probadores").
    - `SUPER_KEY` = clave de `/super`, **24 caracteres o más** (con una más corta la app arranca igual, deja un aviso en el log y `/super` responde 503 `super_key_too_short` hasta que se cambie)
    - `DEMO_MODE=false` cuando haya datos reales (sin reinicio, sin carga de prueba, sin el teléfono del simulador)
    - Avisos push de `/super` (opcional): genera las claves una vez con `npx web-push generate-vapid-keys` y pon `VAPID_PUBLIC_KEY` (la "Public Key"), `VAPID_PRIVATE_KEY` (la "Private Key", secreta) y `VAPID_SUBJECT` = `mailto:tu-correo`. Sin las tres los avisos quedan apagados. Si cambias las claves, cada celular tiene que volver a pulsar "Activar avisos".

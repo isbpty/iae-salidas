@@ -152,4 +152,40 @@ CREATE TABLE IF NOT EXISTS notification_reads (
   PRIMARY KEY (notification_id, user_id));
 `,
   },
+  {
+    /* C2 (calidad #2): `requests.date`/`time` were free `text` -- a malformed value (`2026-13-45`,
+       `29:99`) was only ever caught by the domain layer (isValidDate/isValidTime), never by the
+       schema itself, so a bug or a direct write could still land garbage in the table. Same for the
+       "who" columns on `requests`/`notifications`/`trip_boardings`: nothing stopped a stale or
+       mistyped id from being stored, which is exactly what produced the null-unsafe `.name` accesses
+       C3 fixes at the call sites. Every constraint is added `NOT VALID` then `VALIDATE CONSTRAINT` in
+       the same migration -- `NOT VALID` takes only a quick lock and does not scan/lock existing rows
+       while adding the constraint, `VALIDATE CONSTRAINT` then scans and checks them (also without a
+       blocking exclusive lock held throughout) -- so this never risks failing out or locking up on
+       the demo data already in a live database. All five referenced tables (`persons`, `staff`,
+       `students`, `requests`, `notifications`, `trip_boardings`) are already in `MOVEMENT_TABLES`
+       (see server/db/seed.js), so `resetAll`'s single combined `TRUNCATE ... CASCADE` keeps wiping
+       and reloading them together exactly as before -- these FKs default to `ON DELETE RESTRICT`
+       (nothing in the app ever deletes a person/staff/student row outside of that reset). */
+    version: '012_integrity',
+    sql: `
+ALTER TABLE requests ADD CONSTRAINT requests_date_format CHECK (date ~ '^\\d{4}-\\d{2}-\\d{2}$' AND date::date IS NOT NULL) NOT VALID;
+ALTER TABLE requests VALIDATE CONSTRAINT requests_date_format;
+ALTER TABLE requests ADD CONSTRAINT requests_time_format CHECK (time ~ '^\\d{2}:\\d{2}$') NOT VALID;
+ALTER TABLE requests VALIDATE CONSTRAINT requests_time_format;
+ALTER TABLE requests ADD CONSTRAINT requests_requested_by_fkey FOREIGN KEY (requested_by) REFERENCES persons(id) NOT VALID;
+ALTER TABLE requests VALIDATE CONSTRAINT requests_requested_by_fkey;
+ALTER TABLE requests ADD CONSTRAINT requests_pickup_by_fkey FOREIGN KEY (pickup_by) REFERENCES persons(id) NOT VALID;
+ALTER TABLE requests VALIDATE CONSTRAINT requests_pickup_by_fkey;
+ALTER TABLE requests ADD CONSTRAINT requests_decided_by_fkey FOREIGN KEY (decided_by) REFERENCES staff(id) NOT VALID;
+ALTER TABLE requests VALIDATE CONSTRAINT requests_decided_by_fkey;
+ALTER TABLE notifications ADD CONSTRAINT notifications_person_id_fkey FOREIGN KEY (person_id) REFERENCES persons(id) NOT VALID;
+ALTER TABLE notifications VALIDATE CONSTRAINT notifications_person_id_fkey;
+ALTER TABLE notifications ADD CONSTRAINT notifications_staff_id_fkey FOREIGN KEY (staff_id) REFERENCES staff(id) NOT VALID;
+ALTER TABLE notifications VALIDATE CONSTRAINT notifications_staff_id_fkey;
+ALTER TABLE trip_boardings ADD CONSTRAINT trip_boardings_student_id_fkey FOREIGN KEY (student_id) REFERENCES students(id) NOT VALID;
+ALTER TABLE trip_boardings VALIDATE CONSTRAINT trip_boardings_student_id_fkey;
+CREATE INDEX IF NOT EXISTS activity_at ON activity_events(at);
+`,
+  },
 ];

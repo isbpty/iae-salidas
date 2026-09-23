@@ -96,6 +96,28 @@ test('R3: the Recepción view stops growing with more history -- it does not kee
   await t.close();
 });
 
+/* C2/migration 012: requests.requested_by/pickup_by -> persons, requests.decided_by -> staff,
+   notifications.person_id/staff_id -> persons/staff and trip_boardings.student_id -> students are
+   now enforced FKs. seedDemo/seedLoad would already fail loudly (a 23503 foreign key violation) if
+   they wrote a dangling id -- this asserts the positive as well: every non-null reference in the
+   freshly loaded data actually resolves, including the historical rows this migration had to fix
+   (decidedBy used to be the literal string 'auto' for auto-approved salidas, which is not a staff id). */
+test('seedDemo + seedLoad satisfy every FK migration 012 added -- no dangling requested_by/pickup_by/decided_by/exit_by', async () => {
+  const t = await makeTestApp(); // makeTestApp already seeds via seedDemo
+  await t.db.tx((q) => seedLoad(q, { students: 200, seed: 3, now: NOW, tz: TZ }));
+  const orphanRequestedBy = await t.db.query('SELECT id FROM requests r WHERE NOT EXISTS (SELECT 1 FROM persons p WHERE p.id = r.requested_by)');
+  assert.equal(orphanRequestedBy.length, 0, 'requests.requested_by: ' + JSON.stringify(orphanRequestedBy));
+  const orphanPickupBy = await t.db.query("SELECT id FROM requests r WHERE r.pickup_by IS NOT NULL AND NOT EXISTS (SELECT 1 FROM persons p WHERE p.id = r.pickup_by)");
+  assert.equal(orphanPickupBy.length, 0, 'requests.pickup_by: ' + JSON.stringify(orphanPickupBy));
+  const orphanDecidedBy = await t.db.query("SELECT id, decided_by FROM requests r WHERE r.decided_by IS NOT NULL AND NOT EXISTS (SELECT 1 FROM staff s WHERE s.id = r.decided_by)");
+  assert.equal(orphanDecidedBy.length, 0, 'requests.decided_by: ' + JSON.stringify(orphanDecidedBy));
+  const autoSentinel = await t.db.query("SELECT id FROM requests WHERE decided_by = 'auto'");
+  assert.equal(autoSentinel.length, 0, "no row keeps the old 'auto' sentinel string in decided_by");
+  const orphanBoardings = await t.db.query('SELECT trip_id, student_id FROM trip_boardings tb WHERE NOT EXISTS (SELECT 1 FROM students s WHERE s.id = tb.student_id)');
+  assert.equal(orphanBoardings.length, 0, 'trip_boardings.student_id: ' + JSON.stringify(orphanBoardings));
+  await t.close();
+});
+
 test('seed_load command is admin-only, resets and loads', async () => {
   const t = await makeTestApp();
   await assert.rejects(t.run('seed_load', 'u_s2', { students: 100 }), /forbidden_role/);

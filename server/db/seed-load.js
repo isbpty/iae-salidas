@@ -104,7 +104,9 @@ export async function seedLoad(q, { students = 700, seed = 7, now, tz }) {
         events.push({ requestId: id, at: new Date(T - 0.4 * H), text: 'Solicitud creada por ' + by.name + ' vía WhatsApp' });
         events.push({ requestId: id, at: new Date(T - 0.4 * H), text: 'Pendiente de revisión: menos de 60 min de anticipación' });
       } else {
-        requests.push({ id, kind: 'salida', studentId: st.id, requestedBy: by.id, pickupBy: by.id, pickupKind: 'titular', date: shift(-1), time, reason: 'Cita médica', channel: 'whatsapp', status: 'retirado', pickupPoint: 'Puerta Principal', code: String(1000 + Math.floor(r() * 9000)), createdAt: new Date(T - 26 * H), decidedAt: new Date(T - 25.5 * H), decidedBy: 'auto', autoApproved: true, exitAt: new Date(T - 22 * H), exitBy: 's6' });
+        /* decidedBy stays null for auto-approved rows (autoApproved already records that) -- 'auto'
+           is not a staff id and would violate the requests.decided_by → staff(id) FK (migration 012). */
+        requests.push({ id, kind: 'salida', studentId: st.id, requestedBy: by.id, pickupBy: by.id, pickupKind: 'titular', date: shift(-1), time, reason: 'Cita médica', channel: 'whatsapp', status: 'retirado', pickupPoint: 'Puerta Principal', code: String(1000 + Math.floor(r() * 9000)), createdAt: new Date(T - 26 * H), decidedAt: new Date(T - 25.5 * H), decidedBy: null, autoApproved: true, exitAt: new Date(T - 22 * H), exitBy: 's6' });
         events.push({ requestId: id, at: new Date(T - 26 * H), text: 'Solicitud creada por ' + by.name + ' vía WhatsApp' });
         events.push({ requestId: id, at: new Date(T - 25.5 * H), text: 'Aprobada automáticamente (regla: titular, anticipación, autorizado vigente) · Puerta Principal' });
         events.push({ requestId: id, at: new Date(T - 22 * H), text: 'Retirado por ' + by.name + ' · marcado en garita por Manuel Ortega' });

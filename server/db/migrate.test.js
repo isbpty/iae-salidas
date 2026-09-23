@@ -18,6 +18,23 @@ test('migrate creates the schema once and is idempotent', async () => {
   await db.close();
 });
 
+/* C2/migration 012_integrity: every constraint/index it adds must actually exist afterwards, and
+   `VALIDATE CONSTRAINT` must have left it in the "validated" state (`convalidated`) -- a NOT VALID
+   constraint that silently failed to validate would still let bad data back in. */
+test('012_integrity: date/time CHECKs, the six new FKs and the activity_events(at) index are all present and validated', async () => {
+  const db = await openDb({});
+  await migrate(db);
+  const constraints = await db.query(
+    "SELECT conname, contype, convalidated FROM pg_constraint WHERE conname IN ('requests_date_format', 'requests_time_format', 'requests_requested_by_fkey', 'requests_pickup_by_fkey', 'requests_decided_by_fkey', 'notifications_person_id_fkey', 'notifications_staff_id_fkey', 'trip_boardings_student_id_fkey')");
+  assert.equal(constraints.length, 8, 'missing constraint(s): ' + JSON.stringify(constraints));
+  for (const c of constraints) assert.ok(c.convalidated, c.conname + ' was not validated');
+  assert.equal(constraints.find((c) => c.conname === 'requests_date_format').contype, 'c');
+  assert.equal(constraints.filter((c) => c.contype === 'f').length, 6, 'requested_by/pickup_by/decided_by/person_id/staff_id/student_id FKs');
+  const indexes = await db.query("SELECT indexname FROM pg_indexes WHERE tablename='activity_events' AND indexname='activity_at'");
+  assert.equal(indexes.length, 1);
+  await db.close();
+});
+
 /* R5: on a warm instance `bootstrap` should not take the advisory lock (a real transaction, with a
    real `pg_advisory_xact_lock` round trip on Postgres) or touch the seed at all once the schema is
    current and the demo data is present -- only the one un-locked check. */

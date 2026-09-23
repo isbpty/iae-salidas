@@ -7,9 +7,8 @@ import { logEvent } from '../domain/notifications.js';
 import { roleName } from '../domain/text.js';
 import { badRequest, conflict, deny } from '../domain/errors.js';
 import { createTesters, countTesters } from '../testers.js';
+import { CAPABILITIES as CAPS, ROLES } from '../domain/constants.js';
 
-const CAPS = ['ver_solicitudes', 'aprobar', 'ver_excusas', 'decidir_excusas', 'marcar_salida', 'ver_estudiantes', 'gestionar_autorizados', 'ver_rutas', 'marcar_bus', 'personal', 'config', 'bitacora', 'todos_niveles'];
-const ROLES = ['recepcion', 'profesor', 'garita', 'monitora'];
 const HHMM = /^\d{2}:\d{2}$/;
 const clampInt = (v, min, max, dflt) => { const n = Math.round(Number(v)); return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : dflt; };
 /* Wiping everything for everyone only exists in demo mode (DEMO_MODE, on by default). */

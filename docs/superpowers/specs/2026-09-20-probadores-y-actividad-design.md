@@ -100,7 +100,7 @@ depurar "zonas calientes" después.
   el envoltorio registra login, comando con error de dominio, vista 304 y adjunto con `duration_ms`;
   `/api/telemetry` ignora `testerId`/`userId` del cliente, limita a 100 y devuelve 401 sin sesión;
   `summary` corta sesiones a 10 min y agrega por pantalla/acción/error; `/api/activity/*` da 403 sin super;
-  `seed_load`/`reset_demo` vacían la actividad pero conservan probadores.
+  `seed_load`/`reset_demo` conservan la actividad **y** los probadores (ver §2: solo `/super/purge` la borra).
 - Migración `003_testers_activity` embebida en `schema.js`.
 - Despliegue: push a `connected-pilot`; en producción ejecutar `create_testers` como `u_s1` con el PIN
   compartido y entregar los 10 PINs al usuario.

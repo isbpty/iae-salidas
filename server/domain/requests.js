@@ -179,7 +179,10 @@ export async function approveRequest(ctx, id, opts = {}) {
   const pickupPoint = opts.pickupPoint || ctx.settings.defaultPickupPoint;
   /* Recalculate pickupKind instead of trusting the value frozen at creation: eligibility may have
      changed (a new authorization, a revocation) between create_salida and this approval. */
-  await patchRow(ctx.q, 'requests', id, { status: 'aprobada', pickupPoint, pickupKind: el.kind, decidedAt: ctx.now, autoApproved: !!opts.auto, decidedBy: opts.auto ? 'auto' : opts.by });
+  /* `decidedBy` used to be the literal string 'auto' for auto-approved salidas -- now that it carries
+     a FK to `staff(id)` (C2/migration 012), that sentinel would violate it. `autoApproved` already
+     records the same fact, so an auto-approval simply leaves `decidedBy` null. */
+  await patchRow(ctx.q, 'requests', id, { status: 'aprobada', pickupPoint, pickupKind: el.kind, decidedAt: ctx.now, autoApproved: !!opts.auto, decidedBy: opts.auto ? null : opts.by });
   const who = opts.auto ? 'Aprobada automáticamente (regla: titular, anticipación, autorizado vigente)' : 'Aprobada por ' + staff.name;
   await hist(ctx, req, who + ' · ' + pickupPoint);
   await logEvent(ctx, (opts.auto ? 'Auto-aprobó' : 'Aprobó') + ' salida de ' + st.name + ' · ' + pickupPoint, opts.auto ? 'Sistema' : staff.name);

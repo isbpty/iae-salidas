@@ -5,8 +5,8 @@ import { todayOf } from '../domain/eligibility.js';
 import { isValidDate } from '../domain/time.js';
 import { getRequest, getAttachment, listStudents, searchRequests } from '../db/repo.js';
 import { deny, notFound, badRequest, conflict } from '../domain/errors.js';
+import { REQUEST_STATUSES } from '../domain/constants.js';
 
-const REQUEST_STATUSES = ['pendiente', 'aprobada', 'rechazada', 'retirado', 'cancelada', 'aceptada'];
 const can = (ctx, cap) => ctx.user.role === 'admin' || !!(ctx.permissions[ctx.user.role] || {})[cap];
 
 async function ownRequest(ctx, requestId) {

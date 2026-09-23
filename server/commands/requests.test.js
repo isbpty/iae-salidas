@@ -164,8 +164,10 @@ test('approveRequest revalidates who retrieves: revoked eligibility and a missin
   const { result: r3 } = await t.run('create_salida', 'u_p1', { studentId: 'e2', date: '2026-09-18', time: '11:00', pickupBy: 'p1', reason: 'z' });
   assert.equal(r3.status, 'pendiente', 'short notice needs Recepción');
   /* Simulate a stale row (legacy data, or a person deleted since): approveRequest must never throw a
-     TypeError reading properties off a null person. */
-  await t.db.tx((q) => patchRow(q, 'requests', r3.id, { pickupBy: 'nobody' }));
+     TypeError reading properties off a null person. `null` (not a made-up id like 'nobody') because
+     requests.pickup_by now carries a FK to persons(id) (migration 012, C2) -- a bogus id would be
+     rejected by the constraint itself before this test ever reaches approveRequest. */
+  await t.db.tx((q) => patchRow(q, 'requests', r3.id, { pickupBy: null }));
   await assert.rejects(t.run('approve_request', 'u_s2', { requestId: r3.id }), (e) => e.status === 409 && e.code === 'pickup_person_missing');
   await t.close();
 });

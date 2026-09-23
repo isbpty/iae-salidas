@@ -1,6 +1,7 @@
 import { deny, notFound } from '../domain/errors.js';
+import { STAFF_ROLES } from '../domain/constants.js';
 
-export const STAFF_ROLES = ['admin', 'recepcion', 'profesor', 'garita', 'monitora'];
+export { STAFF_ROLES };
 export function requireCap(ctx, cap) {
   if (ctx.user.role === 'admin') return;
   if (!ctx.permissions[ctx.user.role] || !ctx.permissions[ctx.user.role][cap]) deny('forbidden_capability:' + cap);

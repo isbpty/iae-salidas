@@ -1,4 +1,4 @@
-import { getRoute, findTrip, ensureTrip, upsertBoarding, insertOptOut, patchRow, getStaff, listRequests, listLevels } from '../db/repo.js';
+import { getRoute, findTrip, ensureTrip, upsertBoarding, insertOptOut, patchRow, getStaff, listRequests, listLevels, mustGet } from '../db/repo.js';
 import { minutesOf, nowHHMM, todayISO, weekdayOf } from './time.js';
 import { fmtTime, fmtClock, fmtDate, firstName, LEG_NAMES, roleName } from './text.js';
 import { notifyPerson, notifyRole, notifyStaff, logEvent } from './notifications.js';
@@ -40,7 +40,9 @@ export async function whereIs(ctx, studentId) {
   const todays = await listRequests(ctx.q, { studentIds: [studentId], date: today, kind: 'salida' });
   const exit = todays.find((x) => x.status === 'retirado');
   if (exit) {
-    const off = await getStaff(ctx.q, exit.exitBy);
+    /* C3: `exit.exitBy` (trip_boardings/requests.exit_by carry no FK) used to be read straight off
+       `getStaff` and `.name`'d without a null check -- a stale id was a 500, not a clean error. */
+    const off = await mustGet(ctx.q, 'staff', exit.exitBy, 'staff_not_found');
     const pk = await ctx.getPerson(exit.pickupBy);
     return { text: '🚪 ' + firstName(st.name) + ' salió por ' + exit.pickupPoint + ' a las ' + fmtClock(ctx, exit.exitAt) + ', retirado(a) por ' + describePickup(exit, pk) + '. Confirmó ' + off.name + ' (' + (off.title || roleName(off.role)) + ').' };
   }
@@ -58,7 +60,7 @@ export async function whereIs(ctx, studentId) {
       };
     }
     if (bus.rec && bus.rec.status === 'bajo') {
-      const monBy = await getStaff(ctx.q, bus.rec.by);
+      const monBy = await mustGet(ctx.q, 'staff', bus.rec.by, 'staff_not_found');
       return { text: '✅ ' + firstName(st.name) + ' bajó del ' + r.name + ' en ' + ((r.stops.find((s) => s.id === bus.rec.stopId) || {}).name || 'su parada') + ' a las ' + fmtClock(ctx, bus.rec.ts) + '. Lo confirmó la monitora ' + monBy.name + '.' };
     }
     if (bus.rec && bus.rec.status === 'no_abordo') return { text: '⚠️ La monitora marcó que ' + firstName(st.name) + ' NO abordó el ' + r.name + ' (' + fmtClock(ctx, bus.rec.ts) + ').' + (apprTxt || ' Contacta a recepción al ' + ctx.settings.school.phone + '.') };

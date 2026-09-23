@@ -4,6 +4,20 @@ import { makeTestApp, countQueries, NOW, TZ } from '../test-helpers.js';
 import { seedLoad } from './seed-load.js';
 import { makeCtx } from '../domain/context.js';
 import { staffView } from '../projections/staff.js';
+import { mustGet } from './repo.js';
+
+/* C3: mustGet returns the row when it exists, and throws a 404 with the given code (never a bare
+   TypeError from a caller then reading a property off `null`) when it doesn't. */
+test('mustGet devuelve la fila o lanza notFound(code)', async () => {
+  const t = await makeTestApp();
+  const staff = await t.db.tx((q) => mustGet(q, 'staff', 's2', 'staff_not_found'));
+  assert.equal(staff.name, 'Yadira Batista');
+  await assert.rejects(
+    t.db.tx((q) => mustGet(q, 'staff', 'nobody', 'staff_not_found')),
+    (e) => e.status === 404 && e.code === 'staff_not_found',
+  );
+  await t.close();
+});
 
 /* What these two tests measure, precisely -- and what they deliberately leave out:
 

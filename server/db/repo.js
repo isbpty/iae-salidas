@@ -1,5 +1,6 @@
 import { camel, snake } from './rows.js';
 import { todayISO } from '../domain/time.js';
+import { notFound } from '../domain/errors.js';
 
 const one = (rows) => camel(rows[0] || null);
 const all = (rows) => rows.map(camel);
@@ -37,6 +38,19 @@ export async function patchRow(q, table, id, patch) {
   await q.query(`UPDATE ${table} SET ${sets} WHERE id=$1`, [id, ...keys.map((k) => param(patch[k]))]);
 }
 const marks = (n, from = 1) => Array.from({ length: n }, (_, i) => '$' + (i + from)).join(', ');
+/* C3: a handful of ids (a trip's `by_staff_id`, a request's `exit_by`) are looked up straight off a
+   `getStaff`/`getPerson` result and then `.name`'d without ever checking it -- a legacy or stale id
+   there used to be a 500 (TypeError: Cannot read properties of null) instead of a clean domain error.
+   `mustGet` is the one-line fix for those spots: fetch a row by primary key and throw `notFound(code)`
+   -- HTTP 404, snake_case `code` -- instead of silently handing back `null`. It is deliberately not
+   used everywhere a row is looked up: callers that already have their own null handling (a 409
+   `conflict`, a `deny`, or a value that's optional by design) keep it, since `mustGet`'s 404 would
+   change their status code and error contract. */
+export async function mustGet(q, table, id, code) {
+  const row = one(await q.query(`SELECT * FROM ${table} WHERE id=$1`, [id]));
+  if (!row) notFound(code);
+  return row;
+}
 
 /* ---------- settings, permissions, revision ---------- */
 export async function getSettings(q) { const r = await q.query("SELECT data FROM settings WHERE id='school'"); return r[0] ? r[0].data : {}; }
