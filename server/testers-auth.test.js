@@ -62,7 +62,8 @@ test('one-step login accepts a tester PIN or the shared PIN; shared can be disab
   const t2 = await makeTestApp({ config: { sharedPin: false } }); const s2 = await t2.listen();
   assert.equal((await post(s2.base, '/api/auth/login', { userId: 'u_p5', pin: '4321' })).status, 401);
   assert.equal((await post(s2.base, '/api/auth/pin', { pin: '4321' })).status, 401);
-  for (let i = 0; i < 10; i++) await post(s2.base, '/api/auth/pin', { pin: 'no' });
+  for (let i = 0; i < 27; i++) await post(s2.base, '/api/auth/pin', { pin: 'no' });
+  assert.equal((await post(s2.base, '/api/auth/pin', { pin: '4321' })).status, 401, '30 guesses per address: the two failures above count too');
   assert.equal((await post(s2.base, '/api/auth/pin', { pin: '4321' })).status, 429, 'step one is rate limited per IP');
   await s2.close(); await t2.close();
 });
@@ -148,18 +149,20 @@ test('logout revokes every session of that tester; shared-PIN sessions are untou
   await close(); await t.close();
 });
 
-test('a correct PIN does not reset the per-IP counter', async () => {
+test('a correct PIN does not reset the per-IP counter, shared by step one and the one-step login', async () => {
   const t = await makeTestApp(); const { base, close } = await t.listen();
   const { result: made } = await t.run('create_testers', 'u_s1');
-  for (let i = 0; i < 9; i++) assert.equal((await post(base, '/api/auth/pin', { pin: 'no' })).status, 401);
+  /* Guesses on either surface fill the same `pinguess:` counter (30 in 15 minutes). */
+  for (let i = 0; i < 15; i++) assert.equal((await post(base, '/api/auth/pin', { pin: 'no' })).status, 401);
+  const users = ['u_p1', 'u_p2', 'u_p5', 'u_p6', 'u_p7'];
+  for (let i = 0; i < 14; i++) assert.equal((await post(base, '/api/auth/login', { userId: users[i % 5], pin: 'no' })).status, 401);
   assert.equal((await post(base, '/api/auth/pin', { pin: made[1].pin })).status, 200);
-  assert.equal((await post(base, '/api/auth/pin', { pin: 'no' })).status, 401, 'the tenth failure still answers');
-  assert.equal((await post(base, '/api/auth/pin', { pin: made[1].pin })).status, 429, 'and then the IP is blocked');
-
-  for (let i = 0; i < 9; i++) await post(base, '/api/auth/login', { userId: 'u_p1', pin: 'no' });
   assert.equal((await post(base, '/api/auth/login', { userId: 'u_p1', pin: made[1].pin })).status, 200);
-  assert.equal((await post(base, '/api/auth/login', { userId: 'u_p2', pin: 'no' })).status, 401);
-  assert.equal((await post(base, '/api/auth/login', { userId: 'u_p2', pin: made[1].pin })).status, 429, 'the login counter is not cleared by a success either');
+  assert.equal((await post(base, '/api/auth/pin', { pin: 'no' })).status, 401, 'the thirtieth failure still answers');
+  assert.equal((await post(base, '/api/auth/pin', { pin: made[1].pin })).status, 429, 'and then the IP is blocked');
+  assert.equal((await post(base, '/api/auth/login', { userId: 'u_p2', pin: made[1].pin })).status, 429, 'for the one-step login too');
+  const rows = await t.db.query("SELECT key FROM login_attempts WHERE key LIKE 'pin:%' OR key LIKE 'login:%'");
+  assert.equal(rows.length, 0, 'no separate pin:/login: counters for typed PINs');
   await t.run('reset_demo', 'u_s1', {});
   assert.equal((await post(base, '/api/auth/pin', { pin: made[1].pin })).status, 429, 'a demo reset does not wipe the counters');
   await close(); await t.close();

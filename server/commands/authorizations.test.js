@@ -23,15 +23,15 @@ test('a titular registers a new person with a document for two kids', async () =
 test('validation: document required for new persons, dates, ownership, titular skipped', async () => {
   const t = await makeTestApp();
   await assert.rejects(t.run('add_authorization', 'u_p1', { studentIds: ['e1'], mode: 'nueva', name: 'X', relation: 'Tío', cedula: '1', type: 'siempre' }), /document_required/);
-  await assert.rejects(t.run('add_authorization', 'u_p1', { studentIds: ['e1'], mode: 'cuenta', personId: 'p5', type: 'temporal', from: '2026-09-20', to: '2026-09-10' }), /invalid_date_range/);
-  await assert.rejects(t.run('add_authorization', 'u_p1', { studentIds: ['e3'], mode: 'cuenta', personId: 'p5', type: 'siempre' }), /forbidden_not_titular/);
-  await assert.rejects(t.run('add_authorization', 'u_p1', { studentIds: [], mode: 'cuenta', personId: 'p5', type: 'siempre' }), /students_required/);
-  await assert.rejects(t.run('add_authorization', 'u_p1', { studentIds: ['e1'], mode: 'cuenta', personId: 'p5', type: 'mensual' }), /invalid_type/);
-  const { result } = await t.run('add_authorization', 'u_p1', { studentIds: ['e1'], mode: 'cuenta', personId: 'p2', type: 'siempre' });
+  await assert.rejects(t.run('add_authorization', 'u_p1', { studentIds: ['e1'], mode: 'cuenta', cedula: '8-703-789', type: 'temporal', from: '2026-09-20', to: '2026-09-10' }), /invalid_date_range/);
+  await assert.rejects(t.run('add_authorization', 'u_p1', { studentIds: ['e3'], mode: 'cuenta', cedula: '8-703-789', type: 'siempre' }), /forbidden_not_titular/);
+  await assert.rejects(t.run('add_authorization', 'u_p1', { studentIds: [], mode: 'cuenta', cedula: '8-703-789', type: 'siempre' }), /students_required/);
+  await assert.rejects(t.run('add_authorization', 'u_p1', { studentIds: ['e1'], mode: 'cuenta', cedula: '8-703-789', type: 'mensual' }), /invalid_type/);
+  const { result } = await t.run('add_authorization', 'u_p1', { studentIds: ['e1'], mode: 'cuenta', cedula: '8-702-456', type: 'siempre' });
   assert.equal(result.authorizations.length, 0, 'Ana is already a titular of Joseph');
   const recepcionLast = (await texts(t.db, { role: 'recepcion' })).at(-1);
   assert.ok(!recepcionLast || !recepcionLast.startsWith('Nueva persona autorizada: Ana Pérez'), 'no recepcion notice when nothing was created');
-  const { result: acct } = await t.run('add_authorization', 'u_p1', { studentIds: ['e2'], mode: 'cuenta', personId: 'p5', type: 'una_vez' });
+  const { result: acct } = await t.run('add_authorization', 'u_p1', { studentIds: ['e2'], mode: 'cuenta', cedula: '8-703-789', type: 'una_vez' });
   assert.equal(acct.authorizations[0].type, 'una_vez');
   assert.match((await texts(t.db, { personId: 'p5' })).at(-1), /^🔑 Carlos Rodríguez te autorizó para retirar a Sofía Rodríguez \(Kínder\) · Una vez \(con confirmación\)\. Lo verás en tu app\.$/);
   await t.close();
@@ -64,16 +64,20 @@ test('reception may register and revoke; parents revoke only their family', asyn
 
 test('a parent may only name people they are already meant to see', async () => {
   const t = await makeTestApp();
-  /* María has no account and is authorized only for Carlos' kids: to Wei she is a stranger,
-     and `personId` must not work as a lookup of her cédula and document. */
-  await assert.rejects(t.run('add_authorization', 'u_p7', { studentIds: ['e4'], mode: 'cuenta', personId: 'p3', type: 'siempre' }), /forbidden_person/);
-  await assert.rejects(t.run('add_authorization', 'u_p7', { studentIds: ['e4'], mode: 'cuenta', personId: 'p_nope', type: 'siempre' }), /person_not_found/);
-  const { result } = await t.run('add_authorization', 'u_p7', { studentIds: ['e4'], mode: 'cuenta', personId: 'p1', type: 'siempre' });
+  /* María has no account and is authorized only for Carlos' kids: to Wei she is a stranger (404, the same
+     answer as an unknown cédula). A parent never names a person by id: ids are sequential (p1..pN). */
+  await assert.rejects(t.run('add_authorization', 'u_p7', { studentIds: ['e4'], mode: 'cuenta', cedula: '8-200-111', type: 'siempre' }), /person_not_found/);
+  await assert.rejects(t.run('add_authorization', 'u_p7', { studentIds: ['e4'], mode: 'cuenta', cedula: '8-999-999', type: 'siempre' }), /person_not_found/);
+  const bare = await t.run('add_authorization', 'u_p1', { studentIds: ['e1'], mode: 'cuenta', personId: 'p7', type: 'siempre' }).catch((e) => e);
+  assert.equal(bare.status, 400); assert.equal(bare.code, 'lookup_required');
+  /* A personId sent next to the cédula is ignored: the cédula decides who it is. */
+  const { result } = await t.run('add_authorization', 'u_p7', { studentIds: ['e4'], mode: 'cuenta', personId: 'p3', cedula: '8-701-123', type: 'siempre' });
+  assert.equal(result.authorizations[0].personId, 'p1');
   assert.equal(result.authorizations.length, 1, 'an account holder from the directory is fair game');
   /* And the other branch: somebody without an account who is already authorized for one of my
      own students, even after the authorization for this particular child was revoked. */
   await t.run('revoke_authorization', 'u_p1', { authorizationId: 'a2' });
-  const { result: again } = await t.run('add_authorization', 'u_p1', { studentIds: ['e2'], mode: 'cuenta', personId: 'p3', type: 'siempre' });
+  const { result: again } = await t.run('add_authorization', 'u_p1', { studentIds: ['e2'], mode: 'cuenta', cedula: '8-200-111', type: 'siempre' });
   assert.equal(again.authorizations.length, 1);
   await t.close();
 });
@@ -83,7 +87,7 @@ test('a parent never rewrites the document of a person who already exists', asyn
   const before = await getPerson(t.db, 'p3');
   const { result: up } = await t.run('upload_attachment', 'u_p1', { purpose: 'cedula', mime: 'image/png', name: 'suplantada.png', dataBase64: png });
   await t.run('revoke_authorization', 'u_p1', { authorizationId: 'a2' });
-  const { result } = await t.run('add_authorization', 'u_p1', { studentIds: ['e2'], mode: 'cuenta', personId: 'p3', attachmentId: up.attachmentId, type: 'siempre' });
+  const { result } = await t.run('add_authorization', 'u_p1', { studentIds: ['e2'], mode: 'cuenta', cedula: '8-200-111', attachmentId: up.attachmentId, type: 'siempre' });
   assert.equal(result.authorizations.length, 1, 'the attachment is ignored, not an error');
   const after = await getPerson(t.db, 'p3');
   assert.equal(after.docAttachmentId, before.docAttachmentId);
@@ -111,8 +115,23 @@ test('lookup_person finds an account holder by exact cédula or phone, and nothi
   await assert.rejects(t.run('lookup_person', 'u_s2', { cedula: '8-703-789' }), /forbidden_role/);
   const err = await t.run('lookup_person', 'u_p1', { cedula: 'nadie' }).catch((e) => e);
   assert.equal(err.status, 404);
-  /* the found id is what add_authorization (mode cuenta) takes */
-  const { result } = await t.run('add_authorization', 'u_p1', { studentIds: ['e1'], mode: 'cuenta', personId: byCedula.id, type: 'siempre' });
+  /* add_authorization (mode cuenta) takes the same cédula or phone again, not the id the lookup showed */
+  const { result } = await t.run('add_authorization', 'u_p1', { studentIds: ['e1'], mode: 'cuenta', phone: '6333-3333', type: 'siempre' });
   assert.equal(result.authorizations[0].personId, 'p5');
+  await t.close();
+});
+
+test('lookup_person: 20 per user in 15 minutes (misses count too), and the typed cédula stays out of the audit log', async () => {
+  const t = await makeTestApp();
+  for (let i = 0; i < 19; i++) await t.run('lookup_person', 'u_p1', { cedula: 'nadie-' + i }).catch(() => {});
+  /* add_authorization by cédula spends the same budget: it is a lookup too */
+  await t.run('add_authorization', 'u_p1', { studentIds: ['e1'], mode: 'cuenta', cedula: '8-703-789', type: 'siempre' });
+  const blocked = await t.run('lookup_person', 'u_p1', { cedula: '8-703-789' }).catch((e) => e);
+  assert.equal(blocked.status, 429); assert.equal(blocked.code, 'too_many_attempts');
+  await assert.rejects(t.run('add_authorization', 'u_p1', { studentIds: ['e1'], mode: 'cuenta', cedula: '8-703-789', type: 'siempre' }), /too_many_attempts/);
+  assert.equal((await t.run('lookup_person', 'u_p2', { cedula: '8-703-789' })).result.id, 'p5', 'each user has their own budget');
+  const rows = await t.db.query("SELECT input FROM audit_log WHERE command IN ('lookup_person', 'add_authorization')");
+  assert.ok(rows.length >= 2);
+  for (const r of rows) assert.ok(!JSON.stringify(r.input).includes('8-703-789'), 'no raw cédula in the audit input');
   await t.close();
 });

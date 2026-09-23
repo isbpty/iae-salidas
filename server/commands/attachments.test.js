@@ -58,7 +58,7 @@ test('authorizing an account holder does not hand over their document', async ()
   const t = await makeTestApp(); const { base, close } = await t.listen();
   const p7 = await loginAs(base, 'u_p7');
   const get = (cookie, id) => fetch(`${base}/api/attachments/${id}`, { headers: { cookie } });
-  await t.run('add_authorization', 'u_p7', { studentIds: ['e4'], mode: 'cuenta', personId: 'p1', type: 'siempre' });
+  await t.run('add_authorization', 'u_p7', { studentIds: ['e4'], mode: 'cuenta', cedula: '8-701-123', type: 'siempre' });
   assert.equal((await get(p7, 'att_p1')).status, 403, 'Carlos has his own account: his cédula is not Wei\'s to open');
   assert.equal((await get(p7, 'att_p7')).status, 200, 'own document');
   await close(); await t.close();

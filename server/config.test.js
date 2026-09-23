@@ -26,10 +26,16 @@ test('loadConfig falls back to PGlite locally but requires DATABASE_URL on Verce
   assert.equal(vercel.secure, true);
 });
 
-test('loadConfig: SUPER_KEY, when set, has at least 24 characters; DEMO_MODE is on unless "false"', () => {
-  assert.throws(() => loadConfig({ ...good, SUPER_KEY: 'clave-corta' }), /SUPER_KEY/);
-  assert.equal(loadConfig({ ...good, SUPER_KEY: 'x'.repeat(24) }).superKey, 'x'.repeat(24));
+test('loadConfig: a SUPER_KEY under 24 characters closes /super without crashing; DEMO_MODE is on unless "false"', (t) => {
+  const warn = t.mock.method(console, 'warn', () => {});
+  const short = loadConfig({ ...good, SUPER_KEY: 'clave-corta' });
+  assert.equal(short.superKey, '', 'the short key is never usable');
+  assert.equal(short.superKeyError, 'super_key_too_short');
+  assert.equal(warn.mock.callCount(), 1);
+  const long = loadConfig({ ...good, SUPER_KEY: 'x'.repeat(24) });
+  assert.equal(long.superKey, 'x'.repeat(24)); assert.equal(long.superKeyError, null);
   assert.equal(loadConfig(good).superKey, '', 'empty keeps /super closed');
+  assert.equal(loadConfig(good).superKeyError, null);
   assert.equal(loadConfig(good).demoMode, true);
   assert.equal(loadConfig({ ...good, DEMO_MODE: 'false' }).demoMode, false);
   assert.equal(loadConfig({ ...good, DEMO_MODE: 'true' }).demoMode, true);

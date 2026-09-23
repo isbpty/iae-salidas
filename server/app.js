@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { HttpError } from './domain/errors.js';
 import { randomBytes } from 'node:crypto';
 import { cookieValue, sessionToken, verifySession, pinToken, verifyPinToken, signToken, verifyToken, issuedAtMs } from './session.js';
-import { constantEquals, attemptsBlocked, recordLoginFailure, clearLoginFailures, consumeTokenId } from './auth.js';
+import { constantEquals, attemptsBlocked, recordLoginFailure, clearLoginFailures, consumeTokenId, PIN_GUESS_LIMIT } from './auth.js';
 import { listUsers, getUser, getRevision, getAttachment, insertAudit, purgeActivity } from './db/repo.js';
 import { findTesterByPin, listTesters, regenerateTesterPin, renameTester, setAllowedUsers, getTester, revokeTesterSessions, testerAccess, allowsUser } from './testers.js';
 import { summary, events as activityEvents, exportCsv } from './activity-queries.js';
@@ -82,7 +82,7 @@ export function createApp(deps) {
       { 'set-cookie': cookie(sessionToken(user.id, config.secret, 28800, extra), 28800) });
   }
   /* The view is built for the demo user; the cookie adds who really holds the device. */
-  const decorate = (view, session) => ({ ...view, tester: publicTester(session) || { id: null, name: 'Compartido', super: false } });
+  const decorate = (view, session) => ({ ...view, tester: publicTester(session) || { id: null, name: 'Compartido', super: false }, demoMode: config.demoMode !== false });
   /* ---- Página /super: acceso propio (PIN de super admin + SUPER_KEY) con una cookie aparte de una hora ---- */
   const SUPER_TTL = 3600;
   const superCookie = (token, maxAge) => `iae_super=${token}; HttpOnly; SameSite=Strict; Path=/api; Max-Age=${maxAge}${config.secure ? '; Secure' : ''}`;
@@ -104,8 +104,8 @@ export function createApp(deps) {
     if (path === 'auth/pin' && req.method === 'POST') {
       const input = await readBody(req);
       const now = deps.now();
-      const ipKey = 'pin:' + clientIp(req);
-      if (await attemptsBlocked(db, { ip: ipKey }, now)) return json(res, 429, { error: 'too_many_attempts' });
+      const ipKey = 'pinguess:' + clientIp(req);
+      if (await attemptsBlocked(db, { ip: ipKey, limit: PIN_GUESS_LIMIT }, now)) return json(res, 429, { error: 'too_many_attempts' });
       const tester = await resolvePin(input.pin);
       if (tester === undefined) { await recordLoginFailure(db, [ipKey], now); return json(res, 401, { error: 'invalid_credentials' }); }
       act.session = { testerId: tester ? tester.id : null, super: !!(tester && tester.super) };
@@ -115,8 +115,10 @@ export function createApp(deps) {
     if (path === 'auth/login' && req.method === 'POST') {
       const input = await readBody(req);
       const now = deps.now();
-      const ipKey = 'login:' + clientIp(req), userKey = 'user:' + String(input.userId || '');
-      if (await attemptsBlocked(db, { ip: ipKey, user: userKey }, now)) return json(res, 429, { error: 'too_many_attempts' });
+      /* A typed PIN shares the step-one counter (`pinguess:`); a PIN token cannot be guessed and has its own. */
+      const ipKey = (input.pinToken ? 'login:' : 'pinguess:') + clientIp(req), userKey = 'user:' + String(input.userId || '');
+      const limit = input.pinToken ? undefined : PIN_GUESS_LIMIT;
+      if (await attemptsBlocked(db, { ip: ipKey, user: userKey, limit }, now)) return json(res, 429, { error: 'too_many_attempts' });
       const user = input.userId ? await getUser(db, String(input.userId)) : null;
       let proof = null, token = null;
       if (user && user.active) {
@@ -145,6 +147,8 @@ export function createApp(deps) {
     }
 
     if (path === 'auth/super' && req.method === 'POST') {
+      /* A SUPER_KEY too short to trust closes /super without spending any PIN work. */
+      if (config.superKeyError) return json(res, 503, { error: config.superKeyError });
       const input = await readBody(req);
       const now = deps.now();
       const ipKey = 'super:' + clientIp(req);

@@ -179,7 +179,7 @@ test('eligibility follows the date of the salida, not today: a temporal window o
 
 test('a temporal authorization that starts tomorrow makes tomorrow\'s salida auto-approvable today, but not today\'s', async () => {
   const t = await makeTestApp();
-  await t.run('add_authorization', 'u_p2', { studentIds: ['e1'], mode: 'cuenta', personId: 'p7', type: 'temporal', from: '2026-09-19', to: '2026-10-03' });
+  await t.run('add_authorization', 'u_p2', { studentIds: ['e1'], mode: 'cuenta', cedula: 'E-8-12345', type: 'temporal', from: '2026-09-19', to: '2026-10-03' });
   await assert.rejects(t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-18', time: '13:00', pickupBy: 'p7', reason: 'x' }), /pickup_not_candidate/, 'the window has not started yet');
   const { result: r } = await t.run('create_salida', 'u_p1', { studentId: 'e1', date: '2026-09-19', time: '09:00', pickupBy: 'p7', reason: 'x' });
   assert.equal(r.status, 'aprobada', 'tomorrow the window is open, so it auto-approves today');

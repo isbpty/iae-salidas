@@ -39,11 +39,14 @@ async function refresh() {
     if (!formOpen()) render();
   } catch (e) { if (e.status === 401) return showLogin(); setBadge('sin conexión'); }
 }
+/* Errores que el servidor manda en snake_case y merecen una frase propia. */
+const ERROR_TEXTS = { demo_only: 'Función solo del modo demo', too_many_attempts: 'Demasiados intentos. Espera 15 minutos.' };
+function errorText(e) { return ERROR_TEXTS[e.code] || 'No se pudo guardar: ' + e.message; }
 /* Ejecuta un comando y adopta la vista que devuelve. Lanza el error para que quien llama no siga. */
 async function apply(name, input) {
   UI.busy = true; setBadge('guardando…');
   try { const r = await api.command(name, input); adopt(r); setBadge(connectedText()); return r.result; }
-  catch (e) { if (e.status === 401) showLogin(); else toast('No se pudo guardar: ' + e.message, 'error'); throw e; }
+  catch (e) { if (e.status === 401) showLogin(); else toast(errorText(e), 'error'); throw e; }
   finally { UI.busy = false; }
 }
 function markReadSoon() {
@@ -59,10 +62,12 @@ function afterLogin() {
   UI.schoolTab = ME.role === 'garita' ? 'salidas_hoy' : ME.role === 'monitora' ? 'rutas' : 'inicio';
   UI.phoneId = ME.role === 'parent' ? V.me.id : 'p1';
   document.getElementById('splitWrap').style.display = ME.role === 'admin' ? '' : 'none';
-  document.getElementById('resetBtn').style.display = ME.role === 'admin' ? '' : 'none';
+  /* Reiniciar y el simulador solo existen en modo demo (DEMO_MODE=false los apaga en el servidor). */
+  const demo = V.demoMode !== false;
+  document.getElementById('resetBtn').style.display = demo && ME.role === 'admin' ? '' : 'none';
   document.getElementById('logoutBtn').style.display = '';
   document.getElementById('switchBtn').style.display = '';
-  document.getElementById('simBtn').style.display = '';
+  document.getElementById('simBtn').style.display = demo ? '' : 'none';
   setBadge(connectedText());
   T.start();
   render();

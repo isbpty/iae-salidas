@@ -57,6 +57,17 @@ test('without SUPER_KEY nobody can open /super, and /super is served as a page',
   await close(); await t.close();
 });
 
+test('a SUPER_KEY that was too short answers 503 super_key_too_short and spends no attempts', async () => {
+  const t = await makeTestApp({ config: { superKey: '', superKeyError: 'super_key_too_short' } }); const { base, close } = await t.listen();
+  const { result: made } = await t.run('create_testers', 'u_s1');
+  for (let i = 0; i < 12; i++) {
+    const r = await post(base, '/api/auth/super', { pin: made[0].pin, key: 'clave-corta' });
+    assert.equal(r.status, 503); assert.equal(r.json.error, 'super_key_too_short');
+  }
+  assert.equal((await t.db.query("SELECT count(*)::int AS c FROM login_attempts WHERE key LIKE 'super:%'"))[0].c, 0);
+  await close(); await t.close();
+});
+
 test('regenerating a PIN cuts the open sessions of that tester; regenerating your own keeps the /super page open', async () => {
   const t = await makeTestApp(); const { base, close } = await t.listen();
   const { result: made } = await t.run('create_testers', 'u_s1');
@@ -100,11 +111,16 @@ test('/super edits which demo users a tester may open (null = all)', async () =>
 test('super key attempts have their own counter: failing /super does not lock the app login, and vice versa', async () => {
   const t = await makeTestApp(); const { base, close } = await t.listen();
   const { result: made } = await t.run('create_testers', 'u_s1');
-  for (let i = 0; i < 10; i++) await post(base, '/api/auth/pin', { pin: 'no' });
-  assert.equal((await post(base, '/api/auth/pin', { pin: made[1].pin })).status, 429);
-  assert.equal((await post(base, '/api/auth/super', { pin: made[0].pin, key: CONFIG.superKey })).status, 200, 'PIN failures do not count against /super');
   for (let i = 0; i < 10; i++) await post(base, '/api/auth/super', { pin: made[0].pin, key: 'wrong-key' });
-  assert.equal((await post(base, '/api/auth/super', { pin: made[0].pin, key: CONFIG.superKey })).status, 429);
-  assert.equal((await post(base, '/api/auth/login', { userId: 'u_p1', pin: made[1].pin })).status, 200, 'the app login has its own counter');
+  assert.equal((await post(base, '/api/auth/super', { pin: made[0].pin, key: CONFIG.superKey })).status, 429, '/super stays at 10');
+  assert.equal((await post(base, '/api/auth/pin', { pin: made[1].pin })).status, 200, '/super failures do not count against the app PIN');
+  assert.equal((await post(base, '/api/auth/login', { userId: 'u_p1', pin: made[1].pin })).status, 200, 'nor against the one-step login');
   await close(); await t.close();
+
+  const t2 = await makeTestApp(); const s2 = await t2.listen();
+  const { result: made2 } = await t2.run('create_testers', 'u_s1');
+  for (let i = 0; i < 30; i++) await post(s2.base, '/api/auth/pin', { pin: 'no' });
+  assert.equal((await post(s2.base, '/api/auth/pin', { pin: made2[1].pin })).status, 429);
+  assert.equal((await post(s2.base, '/api/auth/super', { pin: made2[0].pin, key: CONFIG.superKey })).status, 200, 'PIN failures do not count against /super');
+  await s2.close(); await t2.close();
 });

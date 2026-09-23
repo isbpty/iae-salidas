@@ -77,7 +77,7 @@ test('pickupKind is recalculated, not frozen: a titular pickup re-authorized as 
   assert.equal(r.status, 'aprobada');
   assert.equal(r.pickupKind, 'siempre', 'a1: grandma is authorized "siempre"');
   await t.run('revoke_authorization', 'u_p1', { authorizationId: 'a1' });
-  await t.run('add_authorization', 'u_p1', { studentIds: ['e1'], mode: 'cuenta', personId: 'p3', type: 'una_vez' });
+  await t.run('add_authorization', 'u_p1', { studentIds: ['e1'], mode: 'cuenta', cedula: '8-200-111', type: 'una_vez' });
   /* Before the fix, request_confirmation checked the frozen req.pickupKind ('siempre') and
      refused with confirmation_not_needed, and mark_exit then refused with confirmation_required:
      nobody could ever release the student. */

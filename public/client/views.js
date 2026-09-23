@@ -464,7 +464,7 @@ function schoolConfig() {
     '<label>Días para considerar "nueva" una autorización (aviso proactivo) <input type="number" name="newAuthDays" min="0" max="60" value="' + c.newAuthDays + '"></label></div>' +
     '<div class="card"><h3>Niveles y grados</h3>' + V.levels.map((l) => '<div class="small"><b>' + esc(l.name) + '</b>: ' + esc(l.grades.join(', ')) + '</div>').join('') + '</div>' +
     '<button class="btn primary" type="submit">Guardar</button></form>' +
-    (ME.role === 'admin' ? '<div class="card" style="margin-top:14px"><h3>Datos de prueba a escala</h3><p class="small muted">Reinicia la base y genera familias ficticias (de 1 a 5 hijos, promedio 2.65) con titulares, autorizados con cédula, rutas de bus, docentes por grado y un historial de solicitudes. Útil para probar el sistema con el tamaño real de la escuela.</p>' +
+    (ME.role === 'admin' && V.demoMode !== false ? '<div class="card" style="margin-top:14px"><h3>Datos de prueba a escala</h3><p class="small muted">Reinicia la base y genera familias ficticias (de 1 a 5 hijos, promedio 2.65) con titulares, autorizados con cédula, rutas de bus, docentes por grado y un historial de solicitudes. Útil para probar el sistema con el tamaño real de la escuela.</p>' +
     '<div class="actions"><input type="number" id="loadCount" value="700" min="50" max="3000" style="width:110px"> estudiantes <button class="btn danger" data-action="seedLoad">⚗️ Cargar datos de prueba</button></div></div>' : '');
 }
 function schoolLog() {
@@ -599,10 +599,11 @@ function modalExcusa(d) {
     '<label>Adjuntar certificado / foto (opcional) <input type="file" name="attachment" accept="image/*,.pdf"></label>' +
     '<div class="actions"><button class="btn primary" type="submit">Enviar excusa</button><button class="btn" type="button" data-action="closeModal">Cancelar</button></div></form>';
 }
-/* "Padre/madre que ya tiene cuenta": no hay directorio; se busca por cédula o teléfono completos (lookup_person). */
+/* "Padre/madre que ya tiene cuenta": no hay directorio; se busca por cédula o teléfono completos (lookup_person).
+   El resultado solo se muestra: al guardar se envía otra vez la cédula/teléfono buscados, nunca el id. */
 function authLookupFields(d) {
   const found = d.found
-    ? '<div class="row item"><span class="avatar sm">🧑</span><div><b>' + esc(d.found.name) + '</b> <span class="muted small">' + esc(d.found.relation) + ' · 📱 tiene cuenta</span></div><input type="hidden" name="personId" value="' + esc(d.found.id) + '"></div>'
+    ? '<div class="row item"><span class="avatar sm">🧑</span><div><b>' + esc(d.found.name) + '</b> <span class="muted small">' + esc(d.found.relation) + ' · 📱 tiene cuenta</span></div></div>'
     : d.lookupError ? '<p class="small danger-text">' + esc(d.lookupError) + '</p>'
       : '<p class="small muted">Escribe la cédula o el teléfono completos de la persona y pulsa Buscar.</p>';
   return '<div class="grid2"><label>Cédula <input name="lookupCedula" placeholder="8-123-456" value="' + esc(d.lookupCedula || '') + '"></label><label>Teléfono <input name="lookupPhone" placeholder="+507 6xxx-xxxx" value="' + esc(d.lookupPhone || '') + '"></label></div>' +
@@ -729,13 +730,14 @@ const ACTIONS = {
   lookupPerson(el) {
     const form = el.closest('form');
     const d = formData(form);
-    UI.modal.data = Object.assign({}, UI.modal.data, d, { found: null, lookupError: null });
+    UI.modal.data = Object.assign({}, UI.modal.data, d, { found: null, foundBy: null, lookupError: null });
     if (!String(d.lookupCedula || '').trim() && !String(d.lookupPhone || '').trim()) { UI.modal.data.lookupError = 'Escribe la cédula o el teléfono.'; return; }
-    api.command('lookup_person', { cedula: d.lookupCedula, phone: d.lookupPhone })
-      .then((r) => { if (UI.modal && UI.modal.type === 'newAuth') { UI.modal.data.found = r.result; renderModal(); } })
+    const by = { cedula: d.lookupCedula, phone: d.lookupPhone };
+    api.command('lookup_person', by)
+      .then((r) => { if (UI.modal && UI.modal.type === 'newAuth') { UI.modal.data.found = r.result; UI.modal.data.foundBy = by; renderModal(); } })
       .catch((e) => {
         if (e.status === 401) { showLogin(); return; }
-        if (UI.modal && UI.modal.type === 'newAuth') { UI.modal.data.lookupError = e.status === 404 ? 'No encontramos una cuenta con esa cédula o teléfono.' : 'No se pudo buscar: ' + e.message; renderModal(); }
+        if (UI.modal && UI.modal.type === 'newAuth') { UI.modal.data.lookupError = e.status === 404 ? 'No encontramos una cuenta con esa cédula o teléfono.' : e.status === 429 ? 'Demasiadas búsquedas. Espera 15 minutos.' : 'No se pudo buscar: ' + e.message; renderModal(); }
       });
   },
   openModal(el) { UI.modal = { type: el.dataset.modal, data: { id: el.dataset.id } }; },
@@ -808,14 +810,16 @@ const FORMS = {
     if (d.type === 'temporal' && d.to < d.from) { alert('La fecha "hasta" debe ser posterior a "desde".'); return; }
     const file = form.querySelector('input[name=docFile]').files[0] || null;
     if (d.mode === 'nueva' && !file) { alert('Sube una foto de la persona o de su cédula.'); return; }
-    if (d.mode === 'cuenta' && !d.personId) { alert('Busca primero a la persona con su cédula o teléfono.'); return; }
+    const foundBy = UI.modal && UI.modal.data && UI.modal.data.found ? UI.modal.data.foundBy : null;
+    if (d.mode === 'cuenta' && !foundBy) { alert('Busca primero a la persona con su cédula o teléfono.'); return; }
     let attachmentId = null;
     if (file) {
       const up = await run('upload_attachment', await api.filePayload(file, 'cedula'));
       if (!up) return;
       attachmentId = up.attachmentId;
     }
-    const r = await run('add_authorization', { studentIds: ids, mode: d.mode, personId: d.personId, name: d.name, relation: d.relation, cedula: d.cedula, phone: d.phone, attachmentId, type: d.type, from: d.from, to: d.to });
+    const who = d.mode === 'cuenta' ? { cedula: foundBy.cedula, phone: foundBy.phone } : { name: d.name, relation: d.relation, cedula: d.cedula, phone: d.phone };
+    const r = await run('add_authorization', Object.assign({ studentIds: ids, mode: d.mode, attachmentId, type: d.type, from: d.from, to: d.to }, who));
     if (!r) return;
     UI.modal = null; UI.parentTab = 'autorizados'; render(); toast('Autorización guardada', 'ok');
   },

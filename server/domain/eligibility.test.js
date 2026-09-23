@@ -74,7 +74,7 @@ test('eligibility uses the date of the salida, not today: a temporal window outs
 test('a temporal authorization that starts tomorrow is not eligible today but is eligible tomorrow', async () => {
   const t = await makeTestApp();
   const ctx = await ctxFor(t, 'u_p1');
-  await t.run('add_authorization', 'u_p2', { studentIds: ['e1'], mode: 'cuenta', personId: 'p7', type: 'temporal', from: '2026-09-19', to: '2026-10-03' });
+  await t.run('add_authorization', 'u_p2', { studentIds: ['e1'], mode: 'cuenta', cedula: 'E-8-12345', type: 'temporal', from: '2026-09-19', to: '2026-10-03' });
   assert.equal((await pickupEligibility(ctx, 'e1', 'p7', '2026-09-18')).ok, false, 'the window has not started yet');
   assert.equal((await pickupEligibility(ctx, 'e1', 'p7', '2026-09-19')).kind, 'temporal', 'tomorrow the window is open');
   await t.close();
@@ -94,7 +94,7 @@ test('a una_vez authorization without an explicit valid_to expires 7 days after 
 
 test('una_vez respects an explicit valid_to', async () => {
   const t = await makeTestApp();
-  await t.run('add_authorization', 'u_p1', { studentIds: ['e2'], mode: 'cuenta', personId: 'p5', type: 'una_vez', to: '2026-09-19' });
+  await t.run('add_authorization', 'u_p1', { studentIds: ['e2'], mode: 'cuenta', cedula: '8-703-789', type: 'una_vez', to: '2026-09-19' });
   const ctx = await ctxFor(t, 'u_p1');
   assert.equal((await pickupEligibility(ctx, 'e2', 'p5', '2026-09-19')).kind, 'una_vez');
   assert.equal((await pickupEligibility(ctx, 'e2', 'p5', '2026-09-20')).ok, false, 'past the explicit valid_to');

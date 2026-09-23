@@ -61,10 +61,12 @@ test('a spoofed X-Forwarded-For cannot walk around the login limit', async () =>
 test('the per-IP limit counts the real socket, not the header', async () => {
   const t = await makeTestApp(); const { base, close } = await t.listen();
   const attempt = (userId, ip, pin = 'no') => call(base, '/api/auth/login', { method: 'POST', body: { userId, pin }, headers: { 'x-forwarded-for': ip } });
-  /* Ten failures spread over ten different users, each claiming a different address: no single
-     user key reaches the limit, so only the IP key can be what blocks the eleventh try. */
+  /* Thirty PIN failures (the `pinguess:` limit) spread over ten different users, three each, every one claiming a
+     different address: no single user key reaches its limit of 10, so only the IP key can block the next try. */
   const ids = ['u_p1', 'u_p2', 'u_p5', 'u_p6', 'u_p7', 'u_s1', 'u_s2', 'u_s3', 'u_s4', 'u_s5'];
-  for (const [i, userId] of ids.entries()) assert.equal((await attempt(userId, '10.0.0.' + (i + 1))).status, 401, userId);
+  for (let round = 0; round < 3; round++) {
+    for (const [i, userId] of ids.entries()) assert.equal((await attempt(userId, '10.0.' + round + '.' + (i + 1))).status, 401, userId);
+  }
   assert.equal((await attempt('u_s6', '10.0.0.99', '4321')).status, 429);
   await close(); await t.close();
 });

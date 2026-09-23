@@ -98,9 +98,21 @@ test('the HTTP view carries the same shape and updates after a command', async (
   await close(); await t.close();
 });
 
+test('the HTTP view says whether demo mode is on, so the client can hide Reiniciar and the simulator', async () => {
+  const t = await makeTestApp(); const { base, close } = await t.listen();
+  assert.equal((await call(base, '/api/me/view', { cookie: await loginAs(base, 'u_s1') })).json.view.demoMode, true);
+  await close(); await t.close();
+  const t2 = await makeTestApp({ config: { demoMode: false } }); const s2 = await t2.listen();
+  const cookie = await loginAs(s2.base, 'u_s1');
+  assert.equal((await call(s2.base, '/api/me/view', { cookie })).json.view.demoMode, false);
+  const reset = await call(s2.base, '/api/commands/reset_demo', { method: 'POST', cookie, body: {} });
+  assert.equal(reset.status, 403); assert.equal(reset.json.error, 'demo_only');
+  await s2.close(); await t2.close();
+});
+
 test('a parent learns nothing new about an account holder they authorize', async () => {
   const t = await makeTestApp();
-  await t.run('add_authorization', 'u_p7', { studentIds: ['e4'], mode: 'cuenta', personId: 'p1', type: 'siempre' });
+  await t.run('add_authorization', 'u_p7', { studentIds: ['e4'], mode: 'cuenta', cedula: '8-701-123', type: 'siempre' });
   const v = await t.view('u_p7');
   assert.deepEqual(Object.keys(v.persons.p1).sort(), ['hasAccount', 'id', 'name', 'relation']);
   for (const field of ['cedula', 'phone', 'docAttachmentId', 'docName']) assert.ok(!(field in v.persons.p1), field + ' stays with Carlos');

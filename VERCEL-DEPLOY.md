@@ -6,7 +6,7 @@
    - `DATABASE_URL` = cadena de Neon
    - `SESSION_SECRET` = 32+ caracteres aleatorios (`openssl rand -hex 32`)
    - `PILOT_PIN` = el PIN compartido del demo
-   - `SUPER_KEY` = clave de `/super`, **24 caracteres o más** (con una más corta la función no arranca y responde 503)
+   - `SUPER_KEY` = clave de `/super`, **24 caracteres o más** (con una más corta la app arranca igual, deja un aviso en el log y `/super` responde 503 `super_key_too_short` hasta que se cambie)
    - `DEMO_MODE=false` cuando haya datos reales (sin reinicio, sin carga de prueba, sin el teléfono del simulador)
 4. Deploy. La primera petición crea las tablas y siembra los datos.
 5. Prueba: `https://<proyecto>.vercel.app/api/health` → `{"ok":true}` (con sesión añade `db` y `revision`) y abre la raíz para entrar. Si algo falla al arrancar, la respuesta es un 503 `service_unavailable` y el detalle queda en los logs de la función.
