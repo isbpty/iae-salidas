@@ -133,11 +133,12 @@ test('R4/R1: un sondeo 304 en me/view solo lee la revisión, sin getUser ni test
     assert.ok(calls.some((s) => /app_meta/i.test(s)), 'reads the revision');
     assert.ok(!calls.some((s) => /from\s+users/i.test(s)), 'a matching 304 does no getUser query');
     assert.ok(!calls.some((s) => /from\s+testers/i.test(s)), 'a matching 304 does no tester query');
+    /* A token without a valid signature never touches the database. */
+    const before = calls.length;
+    const bad = await call(base, '/api/me/view', { cookie: 'iae_session=not-a-real-token', headers: { 'if-none-match': etag } });
+    assert.equal(bad.status, 401);
+    assert.equal(calls.length, before, 'an invalid signature runs no DB query at all');
   } finally { t.db.query = origQuery; }
-  /* A token without a valid signature never touches the database. */
-  const before = calls.length;
-  const bad = await call(base, '/api/me/view', { cookie: 'iae_session=not-a-real-token', headers: { 'if-none-match': etag } });
-  assert.equal(bad.status, 401);
   await close(); await t.close();
 });
 
